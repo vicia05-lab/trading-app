@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { DeskShell, Empty, Err, Panel } from "@/components/desk-shell";
-import { AlpacaKeyInsert } from "@/components/alpaca-keys";
+import { AlpacaDataSecrets } from "@/components/alpaca-data-secrets";
 import { fetchAdmin, postFireNote, postPause, postPrintKnowledge, postResume, postRetryDeadlines } from "@/desk/server-fns";
 
 export const Route = createFileRoute("/admin")({ component: Admin });
@@ -12,9 +12,9 @@ function Admin() {
       <div className="flex flex-col gap-8">
         <div>
           <h1 className="text-xl font-medium tracking-tight">Admin</h1>
-          <p className="mt-1 text-sm text-muted">Insert Alpaca keys here. Desk operations sit below and are separate.</p>
+          <p className="mt-1 text-sm text-muted">Manage encrypted market-data credentials. Desk operations remain separate.</p>
         </div>
-        <AlpacaKeyInsert />
+        <AlpacaDataSecrets />
         <AdminOps />
       </div>
     </DeskShell>
