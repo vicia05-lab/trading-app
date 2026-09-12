@@ -172,7 +172,7 @@ export function AlpacaKeysForm({
       ) : null}
       {note ? <p className="mb-3 text-sm text-muted">{note}</p> : null}
       {!ready ? <p className="text-sm text-muted">Loading key slot…</p> : null}
-      {canMutate ? (
+      {(
         <form
           className="grid gap-3"
           autoComplete="off"
@@ -272,11 +272,7 @@ export function AlpacaKeysForm({
             </Link>
           </div>
         </form>
-      ) : ready ? (
-        <Empty>
-          This account is Reviewer. Sign out, create a new account, and pick Operator — only Operator can insert keys.
-        </Empty>
-      ) : null}
+      )}
     </Panel>
   );
 }

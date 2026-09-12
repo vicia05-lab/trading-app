@@ -1,11 +1,40 @@
 import { getSql } from "@/lib/db";
 import { createSecretService, SecretError } from "./alpaca-data-secrets";
-import type { SecretCode, SecretStatus } from "./alpaca-data-secrets";
+import type { SecretCode, SecretStatus, SecretSql } from "./alpaca-data-secrets";
 import { loadOrCreateMasterKey } from "./alpaca-master-key.server";
 
 export type SecretReply =
   | { ok: true; can_manage: boolean; status: SecretStatus }
   | { ok: false; code: SecretCode };
+
+async function ensureSchema(db: SecretSql): Promise<void> {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS alpaca_data_secret (
+      owner_user_id text PRIMARY KEY CHECK (length(owner_user_id) BETWEEN 1 AND 256),
+      version uuid NOT NULL,
+      envelope jsonb NOT NULL CHECK (jsonb_typeof(envelope) = 'object'),
+      key_last4 text NOT NULL CHECK (length(key_last4) = 4),
+      updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+      checked_at timestamptz,
+      last_test_started_at timestamptz,
+      test_result text NOT NULL DEFAULT 'NOT_TESTED' CHECK (test_result IN (
+        'NOT_TESTED','VERIFIED','INVALID_CREDENTIALS','AUTH_OR_PERMISSION_DENIED',
+        'RATE_LIMITED','PROVIDER_UNAVAILABLE'
+      ))
+    )`);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS alpaca_data_secret_audit (
+      audit_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      owner_user_id text NOT NULL,
+      version uuid NOT NULL,
+      action text NOT NULL CHECK (action IN ('SAVE','REMOVE','TEST')),
+      result text NOT NULL CHECK (result IN (
+        'SAVED','REMOVED','VERIFIED','INVALID_CREDENTIALS','AUTH_OR_PERMISSION_DENIED',
+        'RATE_LIMITED','PROVIDER_UNAVAILABLE'
+      )),
+      occurred_at timestamptz NOT NULL DEFAULT clock_timestamp()
+    )`);
+}
 
 export async function execute(
   userId: string,
@@ -14,16 +43,14 @@ export async function execute(
 ): Promise<SecretReply> {
   try {
     if (!userId) throw new SecretError("FORBIDDEN");
-    // Per-user store: the signed-in owner may manage their own keys.
-    // Desk Operator/Reviewer is a separate earnings barrier.
-    const canManage = true;
-    if (mutation && !canManage) throw new SecretError("FORBIDDEN");
+    const db = await getSql();
+    await ensureSchema(db);
     const service = createSecretService({
-      db: await getSql(),
+      db,
       durableStorage: true,
       masterKey: () => loadOrCreateMasterKey(),
     });
-    return { ok: true, can_manage: canManage, status: await action(service) };
+    return { ok: true, can_manage: true, status: await action(service) };
   } catch (error) {
     return { ok: false, code: error instanceof SecretError ? error.code : "STORAGE_UNAVAILABLE" };
   }
