@@ -3,7 +3,10 @@ import { getSql, withTransaction } from "@/lib/db";
 import {
   COST_MODEL_CONTENT,
   INITIAL_AST,
+  KernelError,
+  admitPredict,
   costModelHash,
+  dec,
   evaluate,
   inputHash,
   magnitudeBand,
@@ -16,6 +19,7 @@ import {
   directionHit,
   bandHit,
   canon,
+  addNotional,
 } from "@/kernel/index";
 import { assembleCard, benchmarkRelative, impliedMove, selectStraddle, type TypedCard } from "./features";
 import { appendEvent, assertRiskMatches, loadExistingCommand, lockRisk, raiseAlarm, recomputeRisk, withWriter, type WriterCtx } from "./writer";
@@ -701,10 +705,6 @@ async function evaluateAdmission(
   },
 ): Promise<{ outcome: string; reason_codes: string[]; position_id: string | null }> {
   const reasons: string[] = [];
-  if (args.paused) reasons.push("ADMISSION_PAUSED");
-  if (ctx.now.getTime() >= args.cutoff.getTime()) reasons.push("CUTOFF");
-  if (args.timingQuality !== "ISSUER_CONFIRMED") reasons.push("TIMING_NOT_CONFIRMED");
-  if (args.card.card_complete !== true) reasons.push("CARD_INCOMPLETE");
   const quote = await ctx.sql.query<ObsRow>(
     `SELECT observation_id, envelope, received_at::text, observation_hash, payload_protected, payload_hash, permanent_security_id, snapshot_type, session_date::text, source_class, source_event_at::text
      FROM observation
@@ -740,10 +740,26 @@ async function evaluateAdmission(
     `SELECT COUNT(*)::int AS c FROM "position" WHERE permanent_security_id = $1 AND state <> 'CLOSED'`,
     [args.securityId],
   );
-  if (owned[0].c > 0) reasons.push("ALREADY_OWNED");
-  if (cached.reserved_count + 1 > 3) reasons.push("CAPACITY_COUNT");
-  if (Number(cached.reserved_notional) + 5000 > 15000) reasons.push("CAPACITY_NOTIONAL");
-  if (sameEvent[0].c + 1 > 2) reasons.push("PER_EVENT_LIMIT");
+  try {
+    const cap = admitPredict({
+      paused: args.paused,
+      cutoffPassed: ctx.now.getTime() >= args.cutoff.getTime(),
+      timingQuality: args.timingQuality,
+      cardComplete: args.card.card_complete === true,
+      reservedCount: cached.reserved_count,
+      reservedNotional: dec(String(cached.reserved_notional), 4, "0"),
+      sameEventOpen: sameEvent[0].c,
+      alreadyOwned: owned[0].c > 0,
+    });
+    if (cap.outcome === "DENIED") {
+      for (const r of cap.reason_codes) {
+        if (!reasons.includes(r)) reasons.push(r);
+      }
+    }
+  } catch (e) {
+    if (e instanceof KernelError) reasons.push("RISK_STATE_MISMATCH");
+    else throw e;
+  }
   if (reasons.length) return { outcome: "DENIED", reason_codes: reasons, position_id: null };
   return { outcome: "ADMITTED", reason_codes: ["ADMITTED"], position_id: newId("pos") };
 }
@@ -783,6 +799,6 @@ export async function commitPosition(
   const cached = await lockRisk(ctx.sql);
   await ctx.sql.query(
     `UPDATE desk_risk_state SET reserved_count = $1, reserved_notional = $2, updated_event_seq = $3 WHERE sleeve = 'EARNINGS'`,
-    [cached.reserved_count + 1, (Number(cached.reserved_notional) + 5000).toFixed(4), ctx.seq],
+    [cached.reserved_count + 1, addNotional(String(cached.reserved_notional), TICKET), ctx.seq],
   );
 }

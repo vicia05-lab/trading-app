@@ -10,6 +10,8 @@ const HEX = /^[0-9a-f]{64}$/;
 const DEC = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/;
 const KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const CANON_DEC12 = /^-?(?:0|[1-9][0-9]*)\.[0-9]{12}$/;
+/** Money/price text: explicit fraction, no exponent, no '+', no whitespace. */
+const DEC_TEXT = /^-?(?:0|[1-9][0-9]*)\.[0-9]{1,18}$/;
 
 export class KernelError extends Error {
   constructor(message: string) {
@@ -322,7 +324,23 @@ export function inputHash(args: {
 }
 
 export function outputHash(inputHex: string, decisionPayload: unknown): string {
+  if (decisionPayload && typeof decisionPayload === "object" && !Array.isArray(decisionPayload) && "reasons" in decisionPayload) {
+    const rs = (decisionPayload as { reasons: unknown }).reasons;
+    const ordered = normalizeReasons(rs);
+    if (!Array.isArray(rs) || rs.length !== ordered.length || rs.some((x, i) => x !== ordered[i])) {
+      throw new KernelError("NONCANONICAL_REASONS");
+    }
+  }
   return h("Trading App|decision|1", digestBytes(inputHex), canon(decisionPayload));
+}
+
+export function normalizeReasons(reasons: unknown): string[] {
+  if (!Array.isArray(reasons)) throw new KernelError("INVALID_REASONS");
+  for (const r of reasons) {
+    if (typeof r !== "string") throw new KernelError("INVALID_REASONS");
+  }
+  if (reasons.length !== new Set(reasons).size) throw new KernelError("DUPLICATE_REASON");
+  return [...reasons].sort((a, b) => Buffer.from(a, "utf8").compare(Buffer.from(b, "utf8")));
 }
 
 export function payloadHash(normalizedPayload: unknown): string {
@@ -380,6 +398,16 @@ function parseRaw(s: unknown): { neg: boolean; int: bigint; fracDigits: number }
   const int = BigInt(whole + frac);
   if (int === 0n && neg) throw new KernelError("INVALID_DECIMAL");
   return { neg, int, fracDigits: frac.length };
+}
+
+/** PATCH-05: public money/price text. No floats, exponent, '+', whitespace, Inf/NaN. */
+export function decText(value: unknown, code = "INVALID_DECIMAL_TEXT", scale?: number): string {
+  if (typeof value !== "string" || !DEC_TEXT.test(value)) throw new KernelError(code);
+  if (scale !== undefined) {
+    const frac = value.split(".")[1] ?? "";
+    if (frac.length !== scale) throw new KernelError("NONCANONICAL_SCALE");
+  }
+  return value;
 }
 
 function cmpAbs(a: Dec, b: Dec): number {
@@ -497,12 +525,16 @@ export function modeledFill(
   imbalanceCoefficient = "0.000000",
   imbalanceTerm = "0.000000",
 ): string {
+  decText(close, "INVALID_DECIMAL_TEXT");
+  decText(penalty, "INVALID_PENALTY_TEXT");
+  decText(imbalanceCoefficient, "INVALID_IMBALANCE_TEXT");
+  decText(imbalanceTerm, "INVALID_IMBALANCE_TEXT");
   const p = dec(close, 6, "0.000001", "1000000");
   const c = dec(penalty, 6, "0.000001", "0.05");
   const a = dec(imbalanceCoefficient, 6, "0", "0");
   const b = dec(imbalanceTerm, 6, "0", "0");
   const one = dec("1", 6);
-  const inner = add(one, add(c, mul(a, b))); // a*b scale 12, add to c scale 6 — align in add
+  const inner = add(one, add(c, mul(a, b)));
   const prod = mul(p, inner);
   return decToCanonical(quantizeHalfUp(prod, 12), 12);
 }
@@ -513,10 +545,19 @@ export function paperPnl(
   fill: string,
   commission = "0.0000",
 ): string {
-  const n = dec(notional, 4, "0.0001", "5000");
+  decText(notional, "INVALID_NOTIONAL_TEXT");
+  decText(exitPrice, "INVALID_EXIT_TEXT");
+  decText(fill, "INVALID_FILL_TEXT");
+  decText(commission, "INVALID_COMMISSION_TEXT");
+  const n = dec(notional, 4, "0", "5000");
   const x = dec(exitPrice, 6, "0.000001", "1000000");
-  const f = dec(fill, 12, "0.000000000001", "1050000");
+  const f = dec(fill, 12, "0", "1050000");
   const c = dec(commission, 4, "0", "100");
+  if (cmp(f, dec("0", 12)) < 0) throw new KernelError("NONPOSITIVE_FILL");
+  if (cmp(f, dec("0", 12)) === 0) throw new KernelError("DIVISION_BY_ZERO");
+  if (cmp(x, dec("0", 6)) <= 0) throw new KernelError("NONPOSITIVE_EXIT");
+  if (n.neg) throw new KernelError("NEGATIVE_NOTIONAL");
+  if (c.neg) throw new KernelError("NEGATIVE_COMMISSION");
   const ratio = div(x, f, 24);
   const gap = sub(ratio, dec("1", 0));
   const dollar = mul(n, gap);
@@ -525,23 +566,30 @@ export function paperPnl(
 }
 
 export function directionHit(entry: string, exit: string): boolean | null {
+  decText(entry, "INVALID_ENTRY_TEXT");
+  decText(exit, "INVALID_EXIT_TEXT");
   const e = dec(entry, 6, "0.000001", "1000000");
-  const x = dec(exit, 6, "0.000001", "1000000");
+  const x = dec(exit, 6, "-1000000", "1000000");
+  if (cmp(e, dec("0", 6)) <= 0) throw new KernelError("NONPOSITIVE_ENTRY");
   const c = cmp(x, e);
-  if (c === 0) return false; // zero return = MISS
+  if (c === 0) return false;
   return c > 0;
 }
 
 export function bandHit(entry: string, exit: string, low: string, high: string): boolean {
-  // entry * (1+low) <= exit <= entry * (1+high)  using cross multiplication
+  decText(entry, "INVALID_ENTRY_TEXT");
+  decText(exit, "INVALID_EXIT_TEXT");
+  decText(low, "INVALID_BAND_TEXT");
+  decText(high, "INVALID_BAND_TEXT");
   const e = dec(entry, 6, "0.000001", "1000000");
-  const x = dec(exit, 6, "0.000001", "1000000");
+  const x = dec(exit, 6, "-1000000", "1000000");
   const lo = dec(low, 12, "-1000000", "1000000");
   const hi = dec(high, 12, "-1000000", "1000000");
+  if (cmp(e, dec("0", 6)) <= 0) throw new KernelError("NONPOSITIVE_ENTRY");
+  if (cmp(lo, hi) > 0) throw new KernelError("INVALID_BAND_ORDER");
   const one = dec("1", 0);
   const left = mul(e, add(one, lo));
   const right = mul(e, add(one, hi));
-  // compare left <= x <= right at aligned scale
   const xAs = { ...x };
   return cmp(left, { neg: xAs.neg, unscaled: xAs.unscaled, scale: xAs.scale }) <= 0 && cmp(xAs, right) <= 0;
 }
@@ -693,7 +741,7 @@ export function computeCardComplete(card: {
 }): boolean {
   if (card.timing_quality !== "ISSUER_CONFIRMED" && card.timing_quality !== "ESTIMATED") return false;
   if (typeof card.options_valid !== "boolean") return false;
-  if (typeof card.implied_move !== "string") return false;
+  if (typeof card.implied_move !== "string" || !CANON_DEC12.test(card.implied_move)) return false;
   try {
     dec(card.implied_move, 12, "0.000000000001", "5");
   } catch {
@@ -701,7 +749,7 @@ export function computeCardComplete(card: {
   }
   for (const f of ["benchmark_relative_5d", "benchmark_relative_63d"] as const) {
     const v = card[f];
-    if (typeof v !== "string") return false;
+    if (typeof v !== "string" || !CANON_DEC12.test(v)) return false;
     try {
       dec(v, 12, "-1000000", "1000000");
     } catch {
@@ -709,6 +757,89 @@ export function computeCardComplete(card: {
     }
   }
   return true;
+}
+
+export const CAPACITY = {
+  slots: 3,
+  notional: "15000.0000",
+  ticket: "5000.0000",
+  perEvent: 2,
+  marginMinutes: 3,
+} as const;
+
+export type AdmitResult = {
+  outcome: "ADMITTED" | "DENIED";
+  reason_codes: string[];
+  position: boolean;
+};
+
+function isDec(v: unknown): v is Dec {
+  return (
+    !!v &&
+    typeof v === "object" &&
+    "neg" in v &&
+    "unscaled" in v &&
+    "scale" in v &&
+    typeof (v as Dec).neg === "boolean" &&
+    typeof (v as Dec).unscaled === "bigint" &&
+    typeof (v as Dec).scale === "number"
+  );
+}
+
+export function admitPredict(args: {
+  paused: unknown;
+  cutoffPassed: unknown;
+  timingQuality: unknown;
+  cardComplete: unknown;
+  reservedCount: unknown;
+  reservedNotional: unknown;
+  sameEventOpen: unknown;
+  alreadyOwned: unknown;
+}): AdmitResult {
+  for (const [name, val] of [
+    ["paused", args.paused],
+    ["cutoff_passed", args.cutoffPassed],
+    ["card_complete", args.cardComplete],
+    ["already_owned", args.alreadyOwned],
+  ] as const) {
+    if (typeof val !== "boolean") throw new KernelError(`INVALID_ADMISSION_FLAG_${name}`);
+  }
+  if (typeof args.timingQuality !== "string") throw new KernelError("INVALID_TIMING_QUALITY");
+  for (const [name, val] of [
+    ["reserved_count", args.reservedCount],
+    ["same_event_open", args.sameEventOpen],
+  ] as const) {
+    if (typeof val !== "number" || !Number.isInteger(val) || val < 0 || val > 4294967295) {
+      throw new KernelError(`INVALID_ADMISSION_COUNT_${name}`);
+    }
+  }
+  if (!isDec(args.reservedNotional)) throw new KernelError("INVALID_RESERVED_NOTIONAL");
+  if (args.reservedNotional.unscaled < 0n || args.reservedNotional.neg) throw new KernelError("INVALID_RESERVED_NOTIONAL");
+  const capN = dec(CAPACITY.notional, 4);
+  if (cmp(args.reservedNotional, capN) > 0) throw new KernelError("RESERVED_NOTIONAL_EXCEEDS_CAP");
+
+  const reasons: string[] = [];
+  if (args.paused) reasons.push("ADMISSION_PAUSED");
+  if (args.cutoffPassed) reasons.push("CUTOFF");
+  if (args.timingQuality !== "ISSUER_CONFIRMED") reasons.push("TIMING_NOT_CONFIRMED");
+  if (args.cardComplete !== true) reasons.push("CARD_INCOMPLETE");
+  if (args.alreadyOwned) reasons.push("ALREADY_OWNED");
+  if ((args.reservedCount as number) + 1 > CAPACITY.slots) reasons.push("CAPACITY_COUNT");
+  const next = add(args.reservedNotional, dec(CAPACITY.ticket, 4));
+  if (cmp(next, capN) > 0) reasons.push("CAPACITY_NOTIONAL");
+  if ((args.sameEventOpen as number) + 1 > CAPACITY.perEvent) reasons.push("PER_EVENT_LIMIT");
+  if (reasons.length) return { outcome: "DENIED", reason_codes: reasons, position: false };
+  return { outcome: "ADMITTED", reason_codes: ["ADMITTED"], position: true };
+}
+
+export function addNotional(a: string, b: string): string {
+  return decToCanonical(add(dec(a, 4), dec(b, 4)), 4);
+}
+
+export function subNotional(a: string, b: string): string {
+  const r = sub(dec(a, 4), dec(b, 4));
+  if (cmp(r, dec("0", 4)) < 0) throw new KernelError("NEGATIVE_NOTIONAL");
+  return decToCanonical(r, 4);
 }
 
 export const ENGINE_VERSION = "trading-app-evaluator-1.2.0";

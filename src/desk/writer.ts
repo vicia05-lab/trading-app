@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Sql } from "@/lib/db";
 import { withTransaction } from "@/lib/db";
-import { field, sha256 } from "@/kernel/index";
+import { cmp, dec, field, sha256 } from "@/kernel/index";
 import { asHex, DeskError, hexBuf, jsonCanon, newId, requestHash } from "./util";
 
 export type Gate = {
@@ -157,9 +157,9 @@ export async function lockRisk(sql: Sql): Promise<{ reserved_count: number; rese
 export async function assertRiskMatches(sql: Sql): Promise<void> {
   const cached = await lockRisk(sql);
   const actual = await recomputeRisk(sql);
-  const cachedN = Number(cached.reserved_notional);
-  const actualN = Number(actual.notional);
-  if (cached.reserved_count !== actual.count || Math.abs(cachedN - actualN) > 0.00005) {
+  const cachedN = dec(String(cached.reserved_notional), 4);
+  const actualN = dec(String(actual.notional), 4);
+  if (cached.reserved_count !== actual.count || cmp(cachedN, actualN) !== 0) {
     throw new DeskError("RISK_STATE_MISMATCH", "cached risk disagrees with positions", 503);
   }
 }

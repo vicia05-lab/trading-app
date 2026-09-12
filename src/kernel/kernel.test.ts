@@ -1,17 +1,22 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  admitPredict,
   bandHit,
   canon,
+  computeCardComplete,
   COST_MODEL_CONTENT,
   costModelHash,
   dec,
+  decText,
   directionHit,
   evaluate,
   INITIAL_AST,
   inputHash,
   KernelError,
   modeledFill,
+  normalizeReasons,
+  outputHash,
   paperPnl,
   parseCj1,
   ruleAstHash,
@@ -226,4 +231,92 @@ test("decimal domain rejects negative zero and excess scale", () => {
   assert.throws(() => dec("-0", 4), KernelError);
   assert.throws(() => dec("1.0000001", 6), KernelError);
   assert.throws(() => dec("0", 6, "0.000001", "1000000"), KernelError);
+});
+
+const H01 = "bac8f1353582276f85608c618ad44f104f5480fea76d03ce0dbcad4955522726";
+
+const COMPLETE_CARD = {
+  timing_quality: "ISSUER_CONFIRMED",
+  card_complete: true,
+  options_valid: true,
+  implied_move: "0.080000000000",
+  benchmark_relative_5d: "-0.012000000000",
+  benchmark_relative_63d: "0.045000000000",
+};
+
+test("P01 paperPnl rejects floats", () => {
+  assert.throws(() => paperPnl(5000 as unknown as string, "105.000000", "100.050000000000"), KernelError);
+  assert.equal(paperPnl("5000.0000", "105.000000", "100.050000000000", "0.0000"), "247.3763");
+});
+
+test("P02 paperPnl rejects nonpositive fill", () => {
+  assert.throws(() => paperPnl("5000.0000", "105.000000", "-100.000000"), KernelError);
+  assert.throws(() => paperPnl("5000.0000", "105.000000", "0.000000000000"), KernelError);
+  assert.throws(() => paperPnl("5000.0000", "-105.000000", "100.050000000000"), KernelError);
+});
+
+test("P03 hit tests reject floats and inverted bands", () => {
+  assert.throws(() => directionHit(100 as unknown as string, 101 as unknown as string), KernelError);
+  assert.throws(
+    () => bandHit("100.000000", "108.000000", "0.160000000000", "0.040000000000"),
+    KernelError,
+  );
+  assert.equal(directionHit("100.000000", "100.000001"), true);
+  assert.equal(directionHit("100.000000", "100.000000"), false);
+});
+
+test("P04 admission rejects corrupt state", () => {
+  const base = {
+    paused: false,
+    cutoffPassed: false,
+    timingQuality: "ISSUER_CONFIRMED",
+    cardComplete: true,
+    reservedCount: 0,
+    reservedNotional: dec("0.0000", 4),
+    sameEventOpen: 0,
+    alreadyOwned: false,
+  };
+  assert.throws(() => admitPredict({ ...base, reservedNotional: dec("-1.0000", 4) }), KernelError);
+  assert.throws(() => admitPredict({ ...base, reservedCount: -5 }), KernelError);
+  assert.throws(() => admitPredict({ ...base, reservedNotional: 0 }), KernelError);
+  assert.throws(() => admitPredict({ ...base, paused: 0 }), KernelError);
+  assert.equal(admitPredict(base).outcome, "ADMITTED");
+  const pennyOver = admitPredict({ ...base, reservedCount: 2, reservedNotional: dec("10000.0001", 4) });
+  assert.equal(pennyOver.outcome, "DENIED");
+  assert.ok(pennyOver.reason_codes.includes("CAPACITY_NOTIONAL"));
+});
+
+test("P05 modeledFill requires canonical text", () => {
+  for (const bad of ["1E2", "1e2", "+100.000000", " 100.000000", "100.000000 ", "100", "Inf", "NaN", ".5", "1.", "01.000000", ""]) {
+    assert.throws(() => modeledFill(bad), KernelError, `accepted ${bad}`);
+  }
+  assert.throws(() => modeledFill("100.000000", "5e-4"), KernelError);
+  assert.equal(modeledFill("123.456789"), "123.518517394500");
+  assert.equal(decText("100.0000", "INVALID_DECIMAL_TEXT", 4), "100.0000");
+  assert.throws(() => decText("100.000", "INVALID_DECIMAL_TEXT", 4), KernelError);
+});
+
+test("P06 gatekeepers agree on canonicality", () => {
+  const loose = {
+    timing_quality: "ISSUER_CONFIRMED",
+    options_valid: true,
+    implied_move: "0.08",
+    benchmark_relative_5d: "-0.01",
+    benchmark_relative_63d: "0.04",
+  };
+  assert.equal(computeCardComplete(loose), false);
+  assert.equal(evaluate(INITIAL_AST, { ...loose, card_complete: true }).status, "INVALID_CARD");
+  const strict = { ...COMPLETE_CARD };
+  delete (strict as { card_complete?: boolean }).card_complete;
+  assert.equal(computeCardComplete(strict), true);
+  assert.equal(evaluate(INITIAL_AST, COMPLETE_CARD).decision, "PREDICT");
+});
+
+test("P07 reason order is canonical for outputHash", () => {
+  const a = outputHash(H01, { decision: "STAND_DOWN", reasons: ["A", "B"] });
+  assert.throws(() => outputHash(H01, { decision: "STAND_DOWN", reasons: ["B", "A"] }), KernelError);
+  const b = outputHash(H01, { decision: "STAND_DOWN", reasons: normalizeReasons(["B", "A"]) });
+  assert.equal(a, b);
+  const r = evaluate(INITIAL_AST, COMPLETE_CARD);
+  assert.match(outputHash(H01, r), /^[0-9a-f]{64}$/);
 });

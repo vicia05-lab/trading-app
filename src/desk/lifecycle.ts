@@ -1,5 +1,5 @@
 import { getSql } from "@/lib/db";
-import { bandHit, canon, directionHit, modeledFill, paperPnl, sha256 } from "@/kernel/index";
+import { add, bandHit, canon, dec, decToCanonical, directionHit, div, modeledFill, mul, paperPnl, quantizeHalfUp, sha256, sub, subNotional } from "@/kernel/index";
 import { appendEvent, assertRiskMatches, loadExistingCommand, lockRisk, raiseAlarm, withWriter, type WriterCtx } from "./writer";
 import { DeskError, asHex, hexBuf, jsonCanon, newId } from "./util";
 
@@ -191,11 +191,14 @@ async function adjudicateInner(ctx: WriterCtx, commandId: string, manifestId: st
       fr[0].decision === "PREDICT" && fr[0].output_payload.magnitude_low && fr[0].output_payload.magnitude_high
         ? bandHit(entry.price, exit.price, fr[0].output_payload.magnitude_low, fr[0].output_payload.magnitude_high)
         : null;
-    const rawNumer = (Number(exit.price) / Number(entry.price) - 1).toFixed(12);
+    const rawGap = decToCanonical(
+      quantizeHalfUp(sub(div(dec(exit.price, 6), dec(entry.price, 6), 16), dec("1", 0)), 12),
+      12,
+    );
     values = {
       entry_price: entry.price,
       exit_price: exit.price,
-      raw_gap: rawNumer,
+      raw_gap: rawGap,
       direction_hit: fr[0].decision === "PREDICT" ? hit : null,
       band_hit: fr[0].decision === "PREDICT" ? band : null,
       predicted_direction: fr[0].direction,
@@ -333,9 +336,18 @@ async function settleOrImpair(
   if (pos.state === "FILLED" || pos.state === "IMPAIRED_EXIT") {
     if (ca.length) {
       const p = ca[0].envelope?.payload ?? {};
-      const split = Number(p.split_multiplier ?? 0);
-      const dist = Number(p.distribution ?? 0);
-      if (!split) {
+      const splitRaw = p.split_multiplier;
+      const distRaw = p.distribution ?? "0.000000";
+      if (typeof splitRaw !== "string" || typeof distRaw !== "string") {
+        await setState(ctx, pos.position_id, pos.state, "IMPAIRED_EXIT");
+        return;
+      }
+      let split;
+      let dist;
+      try {
+        split = dec(splitRaw, 6, "0.000001", "100");
+        dist = dec(distRaw, 6, "0", "1000000");
+      } catch {
         await setState(ctx, pos.position_id, pos.state, "IMPAIRED_EXIT");
         return;
       }
@@ -349,15 +361,16 @@ async function settleOrImpair(
         await setState(ctx, pos.position_id, pos.state, "IMPAIRED_EXIT");
         return;
       }
-      const units = 5000 / Number(fill);
-      const exitUnits = units * split;
-      const cash = units * dist;
-      const pnl = (exitUnits * Number(exitMark.price) + cash - 5000).toFixed(4);
+      const units = div(dec("5000.0000", 4), dec(fill, 12), 12);
+      const exitUnits = mul(units, split);
+      const cash = mul(units, dist);
+      const exitVal = mul(exitUnits, dec(exitMark.price, 6));
+      const pnl = decToCanonical(quantizeHalfUp(sub(add(exitVal, cash), dec("5000.0000", 4)), 4), 4);
       await writeBook(ctx, pos.position_id, "CORPORATE_ACTION", {
         modeled_fill: fill,
         exit_price: exitMark.price,
         paper_pnl: pnl,
-        split_multiplier: String(split),
+        split_multiplier: splitRaw,
         original_notional: pos.original_reserved_notional,
       }, false);
       await setState(ctx, pos.position_id, "FILLED", "FLAT");
@@ -440,7 +453,7 @@ async function closeAndRelease(ctx: WriterCtx, positionId: string) {
   );
   await ctx.sql.query(
     `UPDATE desk_risk_state SET reserved_count = $1, reserved_notional = $2, updated_event_seq = $3 WHERE sleeve = 'EARNINGS'`,
-    [cached.reserved_count - 1, (Number(cached.reserved_notional) - Number(row[0].original_reserved_notional)).toFixed(4), ctx.seq],
+    [cached.reserved_count - 1, subNotional(String(cached.reserved_notional), String(row[0].original_reserved_notional)), ctx.seq],
   );
 }
 

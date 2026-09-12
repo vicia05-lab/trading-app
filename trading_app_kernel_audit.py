@@ -75,6 +75,9 @@ HEX = re.compile(r"[0-9a-f]{64}\Z")
 DEC = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\Z")
 KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 CANON_DEC12 = re.compile(r"-?(?:0|[1-9][0-9]*)\.[0-9]{12}\Z")
+# PATCH-05: money/price text must be plain decimal with an explicit fraction.
+# Blocks "1E2", "1e2", "+100.00", " 100.00", "100.00 ", "0.1_0", "Inf", "NaN".
+DEC_TEXT = re.compile(r"-?(?:0|[1-9][0-9]*)\.[0-9]{1,18}\Z")
 
 PRODUCT_NAME = "Trading App"
 ENGINE_VERSION = "trading-app-evaluator-1.2.0"
@@ -127,16 +130,13 @@ CAPACITY = {
     "margin_minutes": 3,
 }
 
-
 class KernelError(ValueError):
     pass
-
 
 def ident(s):
     if type(s) is not str or not IDENT.fullmatch(s):
         raise KernelError("INVALID_ID")
     return s
-
 
 def digest_bytes(s):
     if type(s) is not str or not HEX.fullmatch(s):
@@ -146,18 +146,15 @@ def digest_bytes(s):
         raise KernelError("INVALID_SHA256_HEX")
     return raw
 
-
 def field(b: bytes) -> bytes:
     if type(b) is not bytes or len(b) > 4294967295:
         raise KernelError("INVALID_FIELD")
     return struct.pack(">I", len(b)) + b
 
-
 def u32(v: int) -> bytes:
     if type(v) is not int or not 0 <= v <= 4294967295:
         raise KernelError("INVALID_UINT32")
     return struct.pack(">I", v)
-
 
 def canon(obj) -> bytes:
     def validate(x, depth=0):
@@ -185,12 +182,10 @@ def canon(obj) -> bytes:
         obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
     ).encode("utf-8")
 
-
 def h(domain: str, *parts: bytes) -> str:
     return hashlib.sha256(
         field(domain.encode("ascii")) + b"".join(field(p) for p in parts)
     ).hexdigest()
-
 
 def shuffle(ids, seed):
     if type(ids) is not list:
@@ -204,7 +199,6 @@ def shuffle(ids, seed):
         ids,
         key=lambda x: (hashlib.sha256(b + x.encode("utf-8")).digest(), x.encode("utf-8")),
     )
-
 
 def input_hash(
     manifest_id,
@@ -247,38 +241,47 @@ def input_hash(
         encoded += field(pid.encode("utf-8")) + field(digest_bytes(ph))
     return hashlib.sha256(encoded).hexdigest()
 
+def normalize_reasons(reasons):
+    """PATCH-07: canonical reason ordering — sorted by utf-8, deduplicated."""
+    if type(reasons) is not list:
+        raise KernelError("INVALID_REASONS")
+    for r in reasons:
+        if type(r) is not str:
+            raise KernelError("INVALID_REASONS")
+    if len(reasons) != len(set(reasons)):
+        raise KernelError("DUPLICATE_REASON")
+    return sorted(reasons, key=lambda r: r.encode("utf-8"))
 
 def output_hash(input_hex, decision_payload) -> str:
+    """PATCH-07: 'reasons' is an ordered JSON list, so an unsorted producer made
+    the decision hash nondeterministic for the same logical outcome. The list is
+    now required to arrive already canonically ordered and deduplicated."""
+    if type(decision_payload) is dict and "reasons" in decision_payload:
+        rs = decision_payload["reasons"]
+        if rs != normalize_reasons(rs):
+            raise KernelError("NONCANONICAL_REASONS")
     return h("Trading App|decision|1", digest_bytes(input_hex), canon(decision_payload))
-
 
 def payload_hash(normalized_payload) -> str:
     return h("Trading App|payload|1", canon(normalized_payload))
 
-
 def observation_hash(envelope) -> str:
     return h("Trading App|observation|1", canon(envelope))
-
 
 def rule_ast_hash(ast) -> str:
     return h("Trading App|rule|1", canon(ast))
 
-
 def policy_hash(bundle) -> str:
     return h("Trading App|policy|1", canon(bundle))
-
 
 def cost_model_hash(content) -> str:
     return h("Trading App|cost|1", canon(content))
 
-
 def snapshot_hash(content) -> str:
     return h("Trading App|snapshot|2", canon(content))
 
-
 def manifest_hash(content) -> str:
     return h("Trading App|manifest|2", canon(content))
-
 
 def _dec_ctx():
     return localcontext(
@@ -289,6 +292,18 @@ def _dec_ctx():
         )
     )
 
+def dec_text(value, code="INVALID_DECIMAL_TEXT", scale=None) -> Decimal:
+    """PATCH-05: parse decimal TEXT only. No floats, no exponent, no whitespace,
+    no leading '+', no underscores, no Inf/NaN. Optional exact-scale pinning for
+    callers that hash or persist the raw string."""
+    if type(value) is not str or not DEC_TEXT.fullmatch(value):
+        raise KernelError(code)
+    if scale is not None:
+        frac = value.split(".", 1)[1]
+        if len(frac) != scale:
+            raise KernelError("NONCANONICAL_SCALE")
+    with _dec_ctx():
+        return D(value)
 
 def modeled_fill(
     close: str,
@@ -296,51 +311,64 @@ def modeled_fill(
     imbalance_coefficient: str = "0.000000",
     imbalance_term: str = "0.000000",
 ) -> str:
-    """close * (1 + penalty + coeff * term), quantized to 12 dp, ROUND_HALF_UP."""
-    if type(close) is not str:
-        raise KernelError("INVALID_DECIMAL_TEXT")
+    p = dec_text(close, "INVALID_DECIMAL_TEXT")
+    c = dec_text(penalty, "INVALID_PENALTY_TEXT")
+    a = dec_text(imbalance_coefficient, "INVALID_IMBALANCE_TEXT")
+    b = dec_text(imbalance_term, "INVALID_IMBALANCE_TEXT")
     with _dec_ctx():
-        p = D(close)
-        c = D(penalty)
-        a = D(imbalance_coefficient)
-        b = D(imbalance_term)
         if p <= 0 or p > D("1000000"):
             raise KernelError("ABOVE_OR_BELOW_DOMAIN")
         out = (p * (D("1") + c + a * b)).quantize(D("0.000000000001"), rounding=ROUND_HALF_UP)
         return format(out, "f")
 
-
 def paper_pnl(notional: str, exit_price: str, fill: str, commission: str = "0.0000") -> str:
-    """(notional * (exit/fill - 1) - 2*commission) at 4 dp."""
+    """(notional * (exit/fill - 1) - 2*commission) at 4 dp.
+
+    PATCH-01: rejects float/non-text args (was silently accepting floats).
+    PATCH-02: rejects fill <= 0 (was sign-flipping P&L on a negative fill).
+    """
+    n = dec_text(notional, "INVALID_NOTIONAL_TEXT")
+    x = dec_text(exit_price, "INVALID_EXIT_TEXT")
+    f = dec_text(fill, "INVALID_FILL_TEXT")
+    c = dec_text(commission, "INVALID_COMMISSION_TEXT")
+    if f <= 0:
+        raise KernelError("DIVISION_BY_ZERO" if f == 0 else "NONPOSITIVE_FILL")
+    if x <= 0:
+        raise KernelError("NONPOSITIVE_EXIT")
+    if n < 0:
+        raise KernelError("NEGATIVE_NOTIONAL")
+    if c < 0:
+        raise KernelError("NEGATIVE_COMMISSION")
     with _dec_ctx():
-        n = D(notional)
-        x = D(exit_price)
-        f = D(fill)
-        c = D(commission)
-        if f == 0:
-            raise KernelError("DIVISION_BY_ZERO")
         dollar = n * (x / f - D("1")) - D("2") * c
         return format(dollar.quantize(D("0.0001"), rounding=ROUND_HALF_UP), "f")
 
-
 def direction_hit(entry: str, exit: str) -> bool:
-    """Zero return is a MISS (False), not None. Long-only: exit > entry is a hit."""
+    """Zero return is a MISS (False), not None. Long-only: exit > entry is a hit.
+
+    PATCH-03: rejects float/non-text args so hit labels are never float-derived.
+    """
+    e = dec_text(entry, "INVALID_ENTRY_TEXT")
+    x = dec_text(exit, "INVALID_EXIT_TEXT")
+    if e <= 0:
+        raise KernelError("NONPOSITIVE_ENTRY")
     with _dec_ctx():
-        e = D(entry)
-        x = D(exit)
         if x == e:
             return False
         return x > e
 
-
 def band_hit(entry: str, exit: str, low: str, high: str) -> bool:
+    """PATCH-03: text-only args; band must be ordered."""
+    e = dec_text(entry, "INVALID_ENTRY_TEXT")
+    x = dec_text(exit, "INVALID_EXIT_TEXT")
+    lo = dec_text(low, "INVALID_BAND_TEXT")
+    hi = dec_text(high, "INVALID_BAND_TEXT")
+    if e <= 0:
+        raise KernelError("NONPOSITIVE_ENTRY")
+    if lo > hi:
+        raise KernelError("INVALID_BAND_ORDER")
     with _dec_ctx():
-        e = D(entry)
-        x = D(exit)
-        lo = D(low)
-        hi = D(high)
         return e * (D("1") + lo) <= x <= e * (D("1") + hi)
-
 
 def _canon12(d: Decimal) -> str:
     q = d.quantize(D("0.000000000000"), rounding=ROUND_HALF_UP)
@@ -351,7 +379,6 @@ def _canon12(d: Decimal) -> str:
     frac = (frac + "0" * 12)[:12]
     return f"{whole}.{frac}"
 
-
 def magnitude_band(implied_move: str) -> dict:
     with _dec_ctx():
         m = D(implied_move)
@@ -359,7 +386,6 @@ def magnitude_band(implied_move: str) -> dict:
             "low": _canon12(m * D("0.5")),
             "high": _canon12(m * D("2.0")),
         }
-
 
 def validate_ast(ast) -> None:
     if type(ast) is not dict:
@@ -389,7 +415,6 @@ def validate_ast(ast) -> None:
         if typ == "decimal":
             if type(v) is not str or not CANON_DEC12.fullmatch(v):
                 raise KernelError("NONCANONICAL_CONSTANT")
-
 
 def evaluate(ast, card) -> dict:
     """Total function: never throws to the caller. Invalid rule → STAND_DOWN + INVALID_RULE."""
@@ -484,15 +509,17 @@ def evaluate(ast, card) -> dict:
         "reasons": [],
     }
 
-
 def compute_card_complete(card: dict) -> bool:
     tq = card.get("timing_quality")
     if tq not in ("ISSUER_CONFIRMED", "ESTIMATED"):
         return False
     if type(card.get("options_valid")) is not bool:
         return False
+    # PATCH-06: use the SAME canonicality rule the evaluator uses (CANON_DEC12).
+    # Previously this accepted "0.08" while evaluate() called it INVALID_CARD, so
+    # the two gatekeepers disagreed on what a valid card is.
     mv = card.get("implied_move")
-    if type(mv) is not str:
+    if type(mv) is not str or not CANON_DEC12.fullmatch(mv):
         return False
     try:
         with _dec_ctx():
@@ -503,14 +530,14 @@ def compute_card_complete(card: dict) -> bool:
         return False
     for f in ("benchmark_relative_5d", "benchmark_relative_63d"):
         v = card.get(f)
-        if type(v) is not str:
+        if type(v) is not str or not CANON_DEC12.fullmatch(v):
             return False
         try:
-            D(v)
+            with _dec_ctx():
+                D(v)
         except Exception:
             return False
     return True
-
 
 def admit_predict(
     *,
@@ -523,7 +550,33 @@ def admit_predict(
     same_event_open: int,
     already_owned: bool,
 ) -> dict:
-    """Admission after PREDICT. Capacity is 3 / 15000 / 2-per-event. Ticket 5000."""
+    """Admission after PREDICT. Capacity is 3 / 15000 / 2-per-event. Ticket 5000.
+
+    PATCH-04: validates the desk-state counters before using them. Previously a
+    negative reserved_count or reserved_notional ADMITTED past the caps, and
+    bools/floats were accepted as counters. Corrupt state now fails loud rather
+    than silently granting capacity.
+    """
+    for name, val in (
+        ("paused", paused),
+        ("cutoff_passed", cutoff_passed),
+        ("card_complete", card_complete),
+        ("already_owned", already_owned),
+    ):
+        if type(val) is not bool:
+            raise KernelError(f"INVALID_ADMISSION_FLAG_{name}")
+    if type(timing_quality) is not str:
+        raise KernelError("INVALID_TIMING_QUALITY")
+    for name, val in (("reserved_count", reserved_count),
+                      ("same_event_open", same_event_open)):
+        if type(val) is not int or val < 0 or val > 4294967295:
+            raise KernelError(f"INVALID_ADMISSION_COUNT_{name}")
+    if type(reserved_notional) is not Decimal:
+        raise KernelError("INVALID_RESERVED_NOTIONAL")
+    if not reserved_notional.is_finite() or reserved_notional < 0:
+        raise KernelError("INVALID_RESERVED_NOTIONAL")
+    if reserved_notional > CAPACITY["notional"]:
+        raise KernelError("RESERVED_NOTIONAL_EXCEEDS_CAP")
     reasons = []
     if paused:
         reasons.append("ADMISSION_PAUSED")
@@ -544,7 +597,6 @@ def admit_predict(
     if reasons:
         return {"outcome": "DENIED", "reason_codes": reasons, "position": False}
     return {"outcome": "ADMITTED", "reason_codes": ["ADMITTED"], "position": True}
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TESTS — golden + adversarial
@@ -573,7 +625,6 @@ COMPLETE_CARD = {
     "benchmark_relative_5d": "-0.012000000000",
     "benchmark_relative_63d": "0.045000000000",
 }
-
 
 class Golden(unittest.TestCase):
     def test_H01_input_hash(self):
@@ -676,7 +727,6 @@ class Golden(unittest.TestCase):
         self.assertFalse(direction_hit("100.000000", "99.999999"))
         self.assertTrue(band_hit("100.000000", "108.000000", "0.040000000000", "0.160000000000"))
         self.assertFalse(band_hit("100.000000", "103.000000", "0.040000000000", "0.160000000000"))
-
 
 class Adversarial(unittest.TestCase):
     def test_float_close_is_rejected(self):
@@ -790,6 +840,176 @@ class Adversarial(unittest.TestCase):
         self.assertEqual(modeled_fill("100.000000"), "100.050000000000")
 
 
+class PatchRegression(unittest.TestCase):
+    """PATCH-01..07: one regression test per finding from the external audit.
+    Every test here FAILS on the unpatched kernel."""
+
+    # PATCH-01 -- paper_pnl accepted floats (modeled_fill did not)
+    def test_P01_paper_pnl_rejects_floats(self):
+        with self.assertRaises(KernelError):
+            paper_pnl(5000.0, 105.0, 100.05)  # type: ignore
+        with self.assertRaises(KernelError):
+            paper_pnl("5000.0000", "105.000000", 100.05)  # type: ignore
+        self.assertEqual(
+            paper_pnl("5000.0000", "105.000000", "100.050000000000", "0.0000"),
+            "247.3763",
+        )
+
+    # PATCH-02 -- negative fill sign-flipped P&L instead of raising
+    def test_P02_paper_pnl_rejects_nonpositive_fill(self):
+        with self.assertRaises(KernelError):
+            paper_pnl("5000.0000", "105.000000", "-100.000000")
+        with self.assertRaises(KernelError):
+            paper_pnl("5000.0000", "105.000000", "0.000000")
+        with self.assertRaises(KernelError):
+            paper_pnl("5000.0000", "-105.000000", "100.050000000000")
+        with self.assertRaises(KernelError):
+            paper_pnl("5000.0000", "105.000000", "100.050000000000", "-1.0000")
+
+    # PATCH-03 -- hit tests accepted floats
+    def test_P03_hit_tests_reject_floats(self):
+        with self.assertRaises(KernelError):
+            direction_hit(100.0, 101.0)  # type: ignore
+        with self.assertRaises(KernelError):
+            band_hit(100.0, 108.0, 0.04, 0.16)  # type: ignore
+        with self.assertRaises(KernelError):
+            band_hit("100.000000", "108.000000", "0.160000000000", "0.040000000000")
+        self.assertTrue(direction_hit("100.000000", "100.000001"))
+        self.assertFalse(direction_hit("100.000000", "100.000000"))
+
+    # PATCH-04 -- negative desk counters ADMITTED past the caps
+    def test_P04_admission_rejects_corrupt_state(self):
+        base = dict(
+            paused=False,
+            cutoff_passed=False,
+            timing_quality="ISSUER_CONFIRMED",
+            card_complete=True,
+            reserved_count=0,
+            reserved_notional=D("0.0000"),
+            same_event_open=0,
+            already_owned=False,
+        )
+        with self.assertRaises(KernelError):
+            admit_predict(**{**base, "reserved_notional": D("-1000000")})
+        with self.assertRaises(KernelError):
+            admit_predict(**{**base, "reserved_count": -5})
+        with self.assertRaises(KernelError):
+            admit_predict(**{**base, "same_event_open": -1})
+        with self.assertRaises(KernelError):
+            admit_predict(**{**base, "reserved_notional": 0.0})  # type: ignore
+        with self.assertRaises(KernelError):
+            admit_predict(**{**base, "reserved_count": True})  # bool is not a count
+        with self.assertRaises(KernelError):
+            admit_predict(**{**base, "paused": 0})  # type: ignore
+        with self.assertRaises(KernelError):
+            admit_predict(**{**base, "reserved_notional": D("15000.0001")})
+        self.assertEqual(admit_predict(**base)["outcome"], "ADMITTED")
+
+    # PATCH-04b -- the cap boundary itself must not move
+    def test_P04b_capacity_boundaries_unchanged(self):
+        at_cap = admit_predict(
+            paused=False, cutoff_passed=False, timing_quality="ISSUER_CONFIRMED",
+            card_complete=True, reserved_count=2, reserved_notional=D("10000.0000"),
+            same_event_open=0, already_owned=False,
+        )
+        self.assertEqual(at_cap["outcome"], "ADMITTED")
+        penny_over = admit_predict(
+            paused=False, cutoff_passed=False, timing_quality="ISSUER_CONFIRMED",
+            card_complete=True, reserved_count=2, reserved_notional=D("10000.0001"),
+            same_event_open=0, already_owned=False,
+        )
+        self.assertEqual(penny_over["outcome"], "DENIED")
+        self.assertIn("CAPACITY_NOTIONAL", penny_over["reason_codes"])
+
+    # PATCH-05 -- exponent / whitespace / sign / underscore spellings collapsed
+    def test_P05_modeled_fill_requires_canonical_text(self):
+        for bad in ("1E2", "1e2", "+100.000000", " 100.000000", "100.000000 ",
+                    "0.1_0", "100", "Inf", "Infinity", "NaN", "-0.000000",
+                    ".5", "1.", "01.000000", ""):
+            with self.assertRaises(KernelError, msg=f"accepted {bad!r}"):
+                modeled_fill(bad)
+        with self.assertRaises(KernelError):
+            modeled_fill("100.000000", penalty="5e-4")
+        self.assertEqual(modeled_fill("123.456789"), "123.518517394500")
+
+    def test_P05b_scale_pinning_available(self):
+        self.assertEqual(dec_text("100.0000", scale=4), D("100.0000"))
+        with self.assertRaises(KernelError):
+            dec_text("100.000", scale=4)
+
+    # PATCH-06 -- compute_card_complete disagreed with evaluate()
+    def test_P06_gatekeepers_agree_on_canonicality(self):
+        loose = {
+            "timing_quality": "ISSUER_CONFIRMED",
+            "options_valid": True,
+            "implied_move": "0.08",
+            "benchmark_relative_5d": "-0.01",
+            "benchmark_relative_63d": "0.04",
+        }
+        self.assertFalse(compute_card_complete(loose))
+        self.assertEqual(
+            evaluate(INITIAL_AST, {**loose, "card_complete": True})["status"],
+            "INVALID_CARD",
+        )
+        strict = {k: v for k, v in COMPLETE_CARD.items() if k != "card_complete"}
+        self.assertTrue(compute_card_complete(strict))
+        self.assertEqual(
+            evaluate(INITIAL_AST, {**strict, "card_complete": True})["decision"],
+            "PREDICT",
+        )
+
+    def test_P06b_every_evaluate_predict_card_is_card_complete(self):
+        """No card may PREDICT while compute_card_complete() calls it incomplete."""
+        variants = [
+            COMPLETE_CARD,
+            {**COMPLETE_CARD, "implied_move": "0.040000000000"},
+            {**COMPLETE_CARD, "implied_move": "0.150000000000"},
+            {**COMPLETE_CARD, "benchmark_relative_5d": "-0.000000000001"},
+        ]
+        for card in variants:
+            if evaluate(INITIAL_AST, card)["decision"] == "PREDICT":
+                self.assertTrue(compute_card_complete(card), msg=str(card))
+
+    # PATCH-07 -- reason order changed the decision hash
+    def test_P07_reason_order_is_canonical(self):
+        a = output_hash(H01, {"decision": "STAND_DOWN", "reasons": ["A", "B"]})
+        with self.assertRaises(KernelError):
+            output_hash(H01, {"decision": "STAND_DOWN", "reasons": ["B", "A"]})
+        b = output_hash(H01, {"decision": "STAND_DOWN",
+                              "reasons": normalize_reasons(["B", "A"])})
+        self.assertEqual(a, b)
+        with self.assertRaises(KernelError):
+            output_hash(H01, {"decision": "STAND_DOWN", "reasons": ["A", "A"]})
+        with self.assertRaises(KernelError):
+            output_hash(H01, {"decision": "STAND_DOWN", "reasons": "A"})
+
+    def test_P07b_evaluate_output_is_always_hashable(self):
+        """Every evaluate() result must pass output_hash unmodified."""
+        cards = [
+            COMPLETE_CARD,
+            {**COMPLETE_CARD, "options_valid": False},
+            {**COMPLETE_CARD, "timing_quality": "ESTIMATED"},
+            {**COMPLETE_CARD, "options_valid": 1},
+            {"card_complete": False},
+            {},
+        ]
+        for card in cards:
+            r = evaluate(INITIAL_AST, card)
+            self.assertRegex(output_hash(H01, r), r"^[0-9a-f]{64}$")
+
+    # Goldens must be untouched by all of the above
+    def test_P08_goldens_survive_the_patch(self):
+        self.assertEqual(input_hash(**BASE_HASH), H01)
+        self.assertEqual(rule_ast_hash(INITIAL_AST), AST_H)
+        self.assertEqual(modeled_fill("123.456789"), "123.518517394500")
+        self.assertEqual(modeled_fill("100.000000"), "100.050000000000")
+        self.assertEqual(
+            paper_pnl("5000.0000", "105.000000", "100.050000000000", "0.0000"),
+            "247.3763",
+        )
+        self.assertEqual(shuffle(["SEC-C", "SEC-A", "SEC-B"], "01" * 32),
+                         ["SEC-A", "SEC-C", "SEC-B"])
+
 def conflicting_paste_input_hash(
     manifest_id,
     permanent_security_id,
@@ -816,7 +1036,6 @@ def conflicting_paste_input_hash(
     for observation_id in pins:
         canonical += field(observation_id.encode("utf-8"))
     return hashlib.sha256(canonical).hexdigest()
-
 
 BRIEF = r"""
 SCRUTINY BRIEF — what to attack next
@@ -883,7 +1102,6 @@ H. Honesty bar
    Do not rubber-stamp. Add tests. Name the bug or name the residual risk.
 """
 
-
 def main():
     print(f"{PRODUCT_NAME} kernel audit")
     print(
@@ -894,14 +1112,14 @@ def main():
     suite = unittest.TestSuite()
     suite.addTests(loader.loadTestsFromTestCase(Golden))
     suite.addTests(loader.loadTestsFromTestCase(Adversarial))
+    suite.addTests(loader.loadTestsFromTestCase(PatchRegression))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     print()
     print(BRIEF)
     if not result.wasSuccessful():
         raise SystemExit(1)
-    print("RESULT: goldens + adversarial suite passed on this interpreter.")
+    print("RESULT: goldens + adversarial + patch-regression suites passed.")
     print("Reviewer: now try to break it. Do not rubber-stamp.")
-
 
 if __name__ == "__main__":
     main()
