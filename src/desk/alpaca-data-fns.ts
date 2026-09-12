@@ -20,9 +20,23 @@ export const saveAlpacaDataSecret = createServerFn({ method: "POST" })
   }).strict())
   .handler(async ({ context, data }) => {
     const { execute } = await import("./alpaca-data-service.server");
-    return execute(context.userId, true, (s) => s.save(
+    const reply = await execute(context.userId, true, (s) => s.save(
       context.userId, { apiKeyId: data.apiKeyId, apiSecret: data.apiSecret }, data.expectedVersion,
     ));
+    if (reply.ok) {
+      try {
+        const { saveCredentials } = await import("./alpaca");
+        await saveCredentials({
+          apiKeyId: data.apiKeyId,
+          apiSecret: data.apiSecret,
+          mode: "PAPER",
+          actor: context.userId,
+        });
+      } catch {
+        /* market-data secret is saved even if the paper venue probe fails */
+      }
+    }
+    return reply;
   });
 
 export const testAlpacaDataSecret = createServerFn({ method: "POST" })

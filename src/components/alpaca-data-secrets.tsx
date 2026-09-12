@@ -95,12 +95,11 @@ export function AlpacaDataSecrets({ transport = api }: { transport?: AlpacaSecre
   }
 
   const status = loaded?.status;
-  const canEdit = !!loaded?.can_manage && !!status?.storage_ready && !loading && !busy;
+  const canEdit = !!loaded?.can_manage && !loading && !busy;
   return (
     <Panel title="Alpaca market-data secrets" aside={status?.configured ? "SAVED" : "NOT SAVED"}>
       <p className="mb-3 text-sm leading-relaxed text-muted">
-        Save your key ID and secret for this signed-in account. These credentials are separate from order routing.
-        Saving or testing them never sends an order or switches the desk out of fixture mode.
+        Paste your Alpaca API key ID and secret. They are encrypted on the server. A save also connects paper trading on Trade.
       </p>
       {loading ? <Empty>Checking secret storage…</Empty> : null}
       {error ? <div className="mb-3"><Err>{error}</Err></div> : null}
@@ -154,7 +153,7 @@ function SecretForm({ expectedVersion, transport, onBusy, onSaved }: {
   const keyId = useId(), secretId = useId();
   const [key, setKey] = useState("");
   const [secret, setSecret] = useState("");
-  const [show, setShow] = useState(false);
+  const [show, setShow] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   async function save(e: React.FormEvent) {
@@ -184,15 +183,16 @@ function SecretForm({ expectedVersion, transport, onBusy, onSaved }: {
         </Dialog.Description>
         <form className="mt-4 grid gap-3" onSubmit={(e) => void save(e)} autoComplete="off">
           <label htmlFor={keyId} className="grid gap-1 text-sm">API key ID
-            <input id={keyId} name="alpaca_data_key_id" type={show ? "text" : "password"}
+            <input id={keyId} name="alpaca_data_key_id" type="text"
               value={key} onChange={(e) => setKey(e.target.value)} disabled={saving} required minLength={8} maxLength={80}
-              autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false}
+              autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false}
+              inputMode="text"
               className="min-h-12 w-full rounded-md border border-border bg-sunken px-3 font-mono text-base" />
           </label>
           <label htmlFor={secretId} className="grid gap-1 text-sm">Secret key
-            <input id={secretId} name="alpaca_data_secret" type={show ? "text" : "password"}
+            <input id={secretId} name="alpaca_data_secret" type="text"
               value={secret} onChange={(e) => setSecret(e.target.value)} disabled={saving} required minLength={8} maxLength={256}
-              autoComplete="new-password" autoCapitalize="none" autoCorrect="off" spellCheck={false}
+              autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false}
               className="min-h-12 w-full rounded-md border border-border bg-sunken px-3 font-mono text-base" />
           </label>
           <label className="flex min-h-11 items-center gap-2 text-sm text-muted">
