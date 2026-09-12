@@ -4,6 +4,7 @@ dist/
 .nitro/
 .tanstack/
 .vite/
+.vercel/
 *.log
 .env
 .env.*
@@ -18,3 +19,5 @@ attachments/
 .DS_Store
 .idea/
 .vscode/
+.node_modules.lock
+.project_id
