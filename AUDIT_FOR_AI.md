@@ -13,7 +13,13 @@ python3 trading_app_kernel_audit.py
 node --experimental-strip-types --test src/kernel/kernel.test.ts
 ```
 
-Runnable kernel packet (this repo root): `trading_app_kernel_audit.py`.
+Runnable packets (this repo root):
+
+- `TRADING_APP_STANDALONE.py` — stdlib verifier + kernel, 21 probes
+- `trading_app_kernel_audit.py` — kernel goldens
+- `TRADING_APP_FOR_AI_CRITIQUE.md` — this brief plus live TypeScript of kernel, verifier, Alpaca, freeze
+
+Pinned commit: `fe7a9f788437956a4b8ef0fbe1a9a5724dbd8aff`
 
 ## Applied patches (PATCH-01..07)
 

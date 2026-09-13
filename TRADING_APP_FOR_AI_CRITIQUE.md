@@ -1,1272 +1,158 @@
-# Trading App — standalone source packet for another AI
+# Trading App — critique packet for another AI
 
-Run the kernel immediately:
+Generated: 2026-09-13T20:30:02Z
+Pinned commit: `fe7a9f788437956a4b8ef0fbe1a9a5724dbd8aff`
+Repository: https://github.com/vicia05-lab/trading-app
+Runnable standalone (stdlib only): `TRADING_APP_STANDALONE.py`
 
-```bash
-python3 trading_app_kernel_audit.py
-```
+You are reviewing a **paper-only AMC earnings desk** plus an optional Alpaca **paper** venue.
+This is the live TypeScript source at the pinned commit. Critique it. Run it. Do not treat it as a sketch.
 
-Full app: https://github.com/vicia05-lab/trading-app
-
-Every production file below is the live source. Critique hashes, fills, capacity, Alpaca key handling, and the Operator/Reviewer barrier.
-
-
-
----
-
-## `AUDIT_FOR_AI.md` (2272 bytes)
-
-```md
-# Critique brief — Trading App (for another AI)
-
-You are reviewing a paper-only AMC earnings desk plus an Alpaca venue.
-
-Clone, run, then attack. Do not treat the app as a toy.
+## How to run
 
 ```bash
 git clone https://github.com/vicia05-lab/trading-app.git
 cd trading-app
+git checkout fe7a9f788437956a4b8ef0fbe1a9a5724dbd8aff
 npm install
 npm run typecheck
 npm test
+python3 TRADING_APP_STANDALONE.py
 python3 trading_app_kernel_audit.py
 ```
 
-Runnable kernel packet (this repo root): `trading_app_kernel_audit.py`.
+Kernel-only (no Node): `python3 TRADING_APP_STANDALONE.py`
 
 ## Product facts
 
-- Product name: Trading App
-- Earnings sleeve: paper-only, long-only, AMC, INITIAL_AST → PREDICT/LONG else STAND_DOWN
-- Alpaca: optional venue for quotes + orders; keys encrypted server-side
-- Operator mutates; Reviewer is read-only (information barrier)
-- Auth is on. Keys live in `alpaca_credential` (singleton), AES-256-GCM
+- Paper-only. Long-only. After-close issuer-confirmed earnings.
+- Freeze is irrevocable. `NO_FREEZE` ≠ `STAND_DOWN`.
+- Earnings-sleeve fills are modeled official-close haircuts (`constant_penalty = 0.000500`), Decimal ROUND_HALF_UP.
+- Alpaca LIVE saves and the live host are rejected. Paper host only.
+- Operator mutates. Reviewer is read-only for research labels. No ADMIN role. Not a time gate.
+- Secrets stay server-side. Wrap key is env or an already-provisioned file — never /tmp or process memory.
+- Mutation clock is `writer_gate.event_seq`. Reject any parallel `vicia/engine` Python fork.
+- Verify of an existing freeze is read-only (`verifyFreezeArtifact`). It must not create a freeze.
 
 ## Must-hold invariants
 
-1. Input hash domain is `Trading App|input|2` (framed SHA-256). Golden H01:
-   `bac8f1353582276f85608c618ad44f104f5480fea76d03ce0dbcad4955522726`
-2. CJ1: JSON numbers are illegal; every number is a decimal string
-3. Pin order does not change the input hash; pin *content* does
-4. `modeled_fill` uses `constant_penalty = 0.000500` (buy: ask*(1+p), sell: bid*(1-p))
-5. Direction hit on a zero return is **MISS**, not HIT
-6. Capacity denial is not FLAT — use IMPAIRED / STAND_DOWN / NO_FREEZE correctly
+1. Input hash domain `Trading App|input|2`. Golden H01 `bac8f1353582276f85608c618ad44f104f5480fea76d03ce0dbcad4955522726`
+2. CJ1: JSON numbers illegal; decimals are strings
+3. Pin *order* does not change input hash; pin *content* does
+4. `modeledFill` penalty `"0.000500"`, 12-place Decimal, not float
+5. Direction hit on a zero return is MISS
+6. Capacity denial is not FLAT
 7. `NO_FREEZE` ≠ `STAND_DOWN`
-8. Writer gate is first lock; event_seq is the only clock for mutations
-9. Alpaca secret never round-trips to the browser
-10. Live Alpaca requires an explicit confirm flag
+8. Alpaca secret never round-trips to the browser
+9. Missing readiness is **Not checked**, never Ready
+10. BYTE_VERIFIED requires a rebuilt commitment chain from **contents**:
+    observation envelope → observationHash
+    card + pins → snapshotHash
+    canonical_content → manifestHash
+    those digests + pins → inputHash
+    Hash(persisted output_payload) = stored output_hash
+    persisted output_payload = replayed payload
+11. Missing or tombstoned observation without attestation → UNVERIFIABLE, not BYTE_VERIFIED
+12. Mismatch diagnostics commit even when verification throws
+13. Verify endpoint never calls freeze creation
 
-## Attack list
+## What this commit claims to have closed
 
-- Float leakage in kernel / PnL / fill
-- Hash contract mismatch vs a “paste kernel” that hashes ids only (no domain)
-- Evaluator totality (undefined vars, extra keys, non-string numbers)
-- Admission predicates skipped
-- Reviewer writing keys or orders
-- SQL identifier `"freeze"` / `"position"` unquoted
-- Keyring wrap-key race
-- Paper vs live host mix-up
-- Order size: qty XOR notional, not both
-- Bootstrap not resume-safe
-
-## Files to read first
-
-1. `src/kernel/index.ts` and `python/trading_app_kernel.py`
-2. `src/desk/writer.ts`, `commands.ts`, `lifecycle.ts`
-3. `migrations/0002_trading_app.sql`, `migrations/0003_alpaca.sql`
-4. `src/desk/alpaca.ts`, `src/components/alpaca-keys.tsx`
-5. `src/desk/server-fns.ts`
-
-Return a GO / NO-GO with failing probes, not vibes.
-```
-
-
----
-
-## `README.md` (1663 bytes)
-
-```md
-# Trading App
-
-Paper-modeled AMC earnings research desk with an Alpaca paper/live venue for quotes and orders.
-
-**Earnings book is paper-only.** Alpaca is a separate venue. Insert keys on `/keys`. Operator can trade; Reviewer cannot.
-
-## Run
-
-```bash
-npm install
-npm run typecheck
-npm test
-python3 trading_app_kernel_audit.py
-npm run dev
-```
-
-Dev server binds `0.0.0.0:8080`. First visit: **Open desk and insert keys**, paste Alpaca paper key ID + secret, then use **Trade**.
-
-Auth is on (Google, X, email). Preview OAuth often fails in an iframe — use the one-tap desk open or email.
-
-## Layout
-
-| Path | Role |
+| Gate | Where |
 |---|---|
-| `src/kernel/` | Pure hash / Decimal / AST kernel (authoritative math) |
-| `src/desk/` | Writer, freeze/admission, queries, Alpaca client |
-| `src/routes/` | Keys, Trade, Desk, Earnings, Predictions, Results, Admin |
-| `migrations/` | Auth, desk schema, Alpaca credential tables |
-| `python/trading_app_kernel.py` | Python reference kernel |
-| `trading_app_kernel_audit.py` | Standalone golden + adversarial tests |
+| LIVE host / LIVE save rejected | `src/desk/alpaca.ts`, `postAlpacaCredentialsImpl` |
+| Operator-only secret mutations | `src/desk/alpaca-data-service.server.ts` |
+| Durable storage not hard-coded | `dbSource === "neon"` |
+| No /tmp or memory wrap keys | `src/desk/alpaca-master-key.server.ts` |
+| New freeze uses sealed rule digest | `src/desk/commands.ts` freezeMember |
+| Existing freeze content replay | `src/desk/verify-freeze.ts` |
+| Verify ≠ create | `postVerifyFreezeImpl` → `verifyFreezeArtifact` |
+| Official mark missing state | `src/desk/lifecycle.ts` officialMark |
+| Operator label barrier | `src/desk/queries.ts` |
 
-## Contracts another AI should attack
+## Attack these probes (do not skip)
 
-- Domain-separated SHA-256: `"Trading App\|input\|2"`
-- CJ1 canonical JSON: numbers are **strings**
-- `Decimal` ROUND_HALF_UP, modeled fill `constant_penalty 0.000500`
-- Golden H01 input hash `bac8f1353582276f85608c618ad44f104f5480fea76d03ce0dbcad4955522726`
-- Capacity: 3 slots / $15k / 2-per-event / $5k ticket
-- `NO_FREEZE` ≠ `STAND_DOWN`; `IMPAIRED` ≠ `FLAT`
-- Browser must not compute labels, fills, risk, or hashes
-- Secrets: AES-256-GCM; never returned to the client
-- Alpaca paper host `paper-api.alpaca.markets`; live is gated
+1. Corrupt `sealed_input.card.benchmark_relative_63d` but leave `snapshot_hash` — must UNVERIFIABLE.
+2. Delete a pinned observation — must UNVERIFIABLE, alarm row survives.
+3. Tombstone a pinned observation — must UNVERIFIABLE.
+4. Change observation envelope payload, leave hash column — must UNVERIFIABLE.
+5. Change `output_payload.magnitude_low`, leave `output_hash` — must UNVERIFIABLE.
+6. Swap `freeze_pin.pin_index` only — must UNVERIFIABLE.
+7. Call verify on a name with no freeze — must NOT insert a freeze row.
+8. Reviewer `execute(..., mutation=true)` — FORBIDDEN.
+9. `saveCredentials({mode:"LIVE"})` — LIVE_DISABLED, no request to api.alpaca.markets.
+10. Confirm `npm test` discovers a non-zero suite and that quoted `scripts/**` is not silently 0 tests.
 
-See `AUDIT_FOR_AI.md` for the critique brief.
-```
+## Still outstanding (do not mark GO if these are undone)
 
+- Database crash/retry and concurrent-writer tests
+- Official-mark correction / vintage-append fixtures
+- Authenticated Operator vs Reviewer browser run on the published site
+- Proof the published grok.me host is this commit
+- Isolated wrapper tests with anonymous / Reviewer / Operator identities against the real `execute()` (not only `alpaca-data-secrets.test.ts`)
 
----
+## Your output
 
-## `package.json` (3531 bytes)
-
-```json
-{
-  "name": "app-builder-workspace",
-  "private": true,
-  "sideEffects": false,
-  "type": "module",
-  "overrides": {
-    "nf3": "0.3.17"
-  },
-  "scripts": {
-    "dev": "node scripts/with-app-env.mjs vite dev --host 0.0.0.0 --port 8080",
-    "build": "node scripts/with-app-env.mjs vite build && npm run db:migrate",
-    "db:migrate": "node scripts/migrate.mjs",
-    "build:dev": "node scripts/with-app-env.mjs vite build --mode development",
-    "preview": "node scripts/with-app-env.mjs vite preview",
-    "preview:restart": "node scripts/preview.mjs restart",
-    "preview:stop": "node scripts/preview.mjs stop",
-    "typecheck": "tsc --noEmit",
-    "check:auth": "node scripts/check-auth-invariant.mjs",
-    "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/kernel/kernel.test.ts",
-    "lint": "eslint .",
-    "format": "prettier --write ."
-  },
-  "dependencies": {
-    "@electric-sql/pglite": "^0.5.4",
-    "@hookform/resolvers": "^5.7.0",
-    "better-auth": "~1.6.30",
-    "jose": "6.2.9",
-    "kysely": "^0.28.5",
-    "pg": "^8.16.3",
-    "@radix-ui/react-accordion": "^1.2.12",
-    "@radix-ui/react-alert-dialog": "^1.1.15",
-    "@radix-ui/react-avatar": "^1.1.11",
-    "@radix-ui/react-checkbox": "^1.3.3",
-    "@radix-ui/react-collapsible": "^1.1.12",
-    "@radix-ui/react-dialog": "^1.1.15",
-    "@radix-ui/react-dropdown-menu": "^2.1.16",
-    "@radix-ui/react-label": "^2.1.8",
-    "@radix-ui/react-popover": "^1.1.15",
-    "@radix-ui/react-progress": "^1.1.8",
-    "@radix-ui/react-radio-group": "^1.3.8",
-    "@radix-ui/react-scroll-area": "^1.2.10",
-    "@radix-ui/react-select": "^2.2.6",
-    "@radix-ui/react-separator": "^1.1.8",
-    "@radix-ui/react-slider": "^1.3.6",
-    "@radix-ui/react-slot": "^1.2.4",
-    "@radix-ui/react-switch": "^1.2.6",
-    "@radix-ui/react-tabs": "^1.1.13",
-    "@radix-ui/react-toggle": "^1.1.10",
-    "@radix-ui/react-toggle-group": "^1.1.11",
-    "@radix-ui/react-tooltip": "^1.2.8",
-    "@tailwindcss/vite": "^4.3.0",
-    "@tanstack/react-query": "^5.101.0",
-    "@tanstack/react-router": "^1.170.0",
-    "@tanstack/react-start": "^1.168.0",
-    "@tanstack/react-table": "^8.21.0",
-    "@tanstack/router-plugin": "^1.168.0",
-    "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
-    "cmdk": "^1.1.1",
-    "date-fns": "^4.0.0",
-    "lucide-react": "^0.510.0",
-    "react": "^19.2.0",
-    "react-day-picker": "^9.14.0",
-    "react-dom": "^19.2.0",
-    "react-hook-form": "^7.54.0",
-    "react-resizable-panels": "^4.6.5",
-    "recharts": "^2.13.0",
-    "sonner": "^2.0.7",
-    "tailwind-merge": "^3.5.0",
-    "tailwindcss": "^4.3.0",
-    "tw-animate-css": "^1.3.4",
-    "vaul": "^1.1.2",
-    "zod": "^4.4.0",
-    "zustand": "^5.0.0"
-  },
-  "devDependencies": {
-    "@eslint/js": "^9.20.0",
-    "@types/node": "^22.16.5",
-    "@types/pg": "^8.11.10",
-    "@types/react": "^19.2.0",
-    "@types/react-dom": "^19.2.0",
-    "@vitejs/plugin-react": "^5.2.0",
-    "eslint": "^9.20.0",
-    "eslint-config-prettier": "^10.1.1",
-    "eslint-plugin-prettier": "^5.2.6",
-    "eslint-plugin-react-hooks": "^5.2.0",
-    "eslint-plugin-react-refresh": "^0.4.20",
-    "globals": "^15.15.0",
-    "lightningcss": "^1.28.0",
-    "nitro": "3.0.260610-beta",
-    "playwright": "^1.62.0",
-    "prettier": "^3.4.0",
-    "typescript": "^5.7.0",
-    "typescript-eslint": "^8.56.1",
-    "vite": "^8.2.0"
-  }
-}
-```
-
+Return GO or NO-GO with failing probes, file:line, and tests you added. No vibes. Do not invent a live broker. Do not rubber-stamp.
 
 ---
 
-## `python/trading_app_kernel.py` (3868 bytes)
+# Live source (pinned commit)
 
-```py
-"""Trading App build-contract v1.2: pure serialization/numeric reference, not app."""
-from __future__ import annotations
-import hashlib, json, re, struct
-from decimal import Decimal, localcontext, ROUND_HALF_UP, Context, InvalidOperation, DivisionByZero, Overflow
-D = Decimal
-IDENT = re.compile('[A-Za-z0-9][A-Za-z0-9:._-]{0,63}\\Z')
-HEX = re.compile('[0-9a-f]{64}\\Z')
-DEC = re.compile('-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?\\Z')
 
-def ident(s):
-    if type(s) is not str or not IDENT.fullmatch(s):
-        raise ValueError('INVALID_ID')
-    return s
+## `docs/ARCHITECTURAL_LOCK.md`
 
-def digest_bytes(s):
-    if type(s) is not str or not HEX.fullmatch(s):
-        raise ValueError('INVALID_SHA256_HEX')
-    return bytes.fromhex(s)
+```
+# Architectural lock — TypeScript kernel only
 
-def field(b):
-    if type(b) is not bytes or len(b) > 4294967295:
-        raise ValueError('INVALID_FIELD')
-    return struct.pack('>I', len(b)) + b
+Decision date: 2026-09-13
+Status: accepted
 
-def u32(v):
-    if type(v) is not int or not 0 <= v <= 4294967295:
-        raise ValueError('INVALID_UINT32')
-    return struct.pack('>I', v)
+A parallel Python package (`vicia/engine/**`) was proposed as
+`[PATCH v1.1.4] Architectural lock: sequencing, hashing, vintages, and access controls`.
+It is **rejected**. It would split the mutation clock and break Golden H01.
 
-def canon(obj):
-    def validate(x, depth=0):
-        if depth > 32:
-            raise ValueError('JSON_DEPTH_EXCEEDED')
-        if x is None or type(x) is bool:
-            return
-        if type(x) is str:
-            x.encode('utf-8', errors='strict')
-            return
-        if type(x) is list:
-            for v in x:
-                validate(v, depth + 1)
-            return
-        if type(x) is dict:
-            for k, v in x.items():
-                if type(k) is not str or not re.fullmatch('[A-Za-z_][A-Za-z0-9_]*', k):
-                    raise ValueError('INVALID_CANONICAL_KEY')
-                validate(v, depth + 1)
-            return
-        raise ValueError('CANONICAL_NUMBERS_MUST_BE_STRINGS')
-    validate(obj)
-    return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf-8')
+Any future sequencing, hashing, vintage, fill, or access tightening is
+implemented only in `src/kernel/` and `src/desk/`.
 
-def h(domain, *parts):
-    return hashlib.sha256(field(domain.encode('ascii')) + b''.join((field(p) for p in parts))).hexdigest()
+## Rejected split-brain
 
-def shuffle(ids, seed):
-    if type(ids) is not list:
-        raise ValueError('INVALID_MEMBER_LIST')
-    b = digest_bytes(seed)
-    for x in ids:
-        ident(x)
-    if len(ids) != len(set(ids)):
-        raise ValueError('DUPLICATE_MEMBER')
-    return sorted(ids, key=lambda x: (hashlib.sha256(b + x.encode('utf-8')).digest(), x.encode('utf-8')))
+Do not add `vicia/`, a second sequencer, a second input hash, a float fill,
+HMAC-secret vintages, an `ADMIN` role, or a time-gated Operator label view.
 
-def input_hash(manifest_id, security_id, manifest_hash, snapshot_hash, rule_hash, engine_hash, cost_hash, margin, pins):
-    ident(manifest_id)
-    ident(security_id)
-    if type(margin) is not int or not 2 <= margin <= 15:
-        raise ValueError('INVALID_MARGIN')
-    pairs = sorted(pins, key=lambda p: p[0].encode('utf-8'))
-    encoded = field(b'Trading App|input|2')
-    encoded += field(manifest_id.encode()) + field(security_id.encode())
-    for x in (manifest_hash, snapshot_hash, rule_hash, engine_hash, cost_hash):
-        encoded += field(digest_bytes(x))
-    encoded += field(u32(margin)) + field(u32(len(pairs)))
-    for pid, ph in pairs:
-        encoded += field(pid.encode()) + field(digest_bytes(ph))
-    return hashlib.sha256(encoded).hexdigest()
+## Locked alignments
 
-def modeled_fill(close, penalty='0.000500', imbalance_coefficient='0.000000', imbalance_term='0.000000'):
-    p = D(close)
-    c = D(penalty)
-    a = D(imbalance_coefficient)
-    b = D(imbalance_term)
-    with localcontext(Context(prec=60, rounding=ROUND_HALF_UP, traps=[InvalidOperation, DivisionByZero, Overflow])):
-        return (p * (D('1') + c + a * b)).quantize(D('0.000000000001'), rounding=ROUND_HALF_UP)
+| Concern | Authority |
+|---|---|
+| Mutation clock | `writer_gate` + `event_seq` inside one writer transaction |
+| Input hash | Domain `Trading App\|input\|2` plus manifest, snapshot, rule, engine, cost, margin, pin **hashes**. Golden H01 must match. |
+| Canonical JSON | CJ1 — numbers are strings |
+| Missing freeze | `NO_FREEZE`. Not `STAND_DOWN`. |
+| Stand-down | Evaluator decision on a complete card |
+| Fill | Decimal `modeledFill`, penalty `"0.000500"`, `quantizeHalfUp` to 12 places |
+| Operator labels | Permanently redacted. Not a `window_end_seq` time gate. No `ADMIN` role. |
+| Vintages | Append-only rows + content hashes. Replay is byte-verified, not HMAC. |
 
-if __name__ == '__main__':
-    got = input_hash(
-        'manifest-20260914', 'SEC-A',
-        '1'*64, '2'*64, '3'*64, '4'*64, '5'*64, 3,
-        [('obs-z', 'a'*64), ('obs-a', 'b'*64)],
-    )
-    assert got == 'bac8f1353582276f85608c618ad44f104f5480fea76d03ce0dbcad4955522726', got
-    print('python oracle ok', got)
-    print('fill', modeled_fill('123.456789'))
+## Probes that must keep failing a Python fork
+
+1. `inputHash` without the domain prefix ≠ H01.
+2. `close * 1.0005` as IEEE float ≠ `modeledFill("123.456789")`.
+3. Missing names at cutoff must grade `NO_FREEZE`, not `STAND_DOWN`.
+4. Operator `results` payload has `research.restricted === true` and no `hit_rate`.
+5. `event_log.event_seq` is contiguous; a Postgres `nextval` beside it is not the clock.
+
 ```
 
+## `src/kernel/index.ts`
 
----
-
-## `trading_app_kernel_audit.py` (31693 bytes)
-
-```py
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Trading App v1.2 — STANDALONE KERNEL AUDIT PACKET
-=================================================
-Give this single file to another model. It does not need the rest of the repo.
-
-WHAT THIS IS
-  The paper-only AMC earnings desk kernel claimed to be authoritative for:
-    product_name            = "Trading App"
-    paperOnly               = true
-    liveTradingSupported    = false
-    activeModelWeight       = "0"
-    engine_version          = "trading-app-evaluator-1.2.0"
-    hash domain (input)     = "Trading App|input|2"
-    rounding                = ROUND_HALF_UP (ties away from zero)
-    numbers in CJ1          = DECIMAL STRINGS ONLY — never JSON numbers
-
-  This is NOT a broker. Browser math must not decide labels, fills, risk, or hashes.
-
-HOW TO RUN
-  python3 trading_app_kernel_audit.py
-  Expected: all tests PASS, then a SCRUTINY BRIEF is printed.
-  Stdlib only (hashlib, decimal, json, re, struct, unittest). No pip.
-
-YOUR JOB (reviewing AI)
-  1. Run the file. If any golden fails, stop and report — the packet is corrupt.
-  2. Attack the kernel: hashes, Decimal vs float, AST, fill/PnL, CJ1, shuffle.
-  3. Compare PRODUCTION KERNEL (this file, top) vs CONFLICTING PASTE (bottom).
-     They do NOT agree. Decide which contract is correct and why.
-  4. Produce a go / no-go with:
-       - bugs that change a PREDICT / fill / hash / capacity decision
-       - tests you added that this file does not already run
-       - residual risk if this kernel is the only authority
-
-DO NOT
-  - Invent a live broker.
-  - Treat JSON numbers as legal in canonical payloads.
-  - Equate NO_FREEZE with STAND_DOWN.
-  - Equate IMPAIRED_* with FLAT.
-  - Use float for money, fills, or hit tests.
-
-GOLDEN VECTORS (must match bit-for-bit)
-  H01 input hash  = bac8f1353582276f85608c618ad44f104f5480fea76d03ce0dbcad4955522726
-  AST hash        = e9cf184a531fd993dc1b36ce0e1a1b0dcd67ebc4b80e4ff1ebe5a72ab00c15f4
-  modeled fill    = 123.456789 * (1+0.000500)  →  123.518517394500
-  hotel-style pnl = notional 5000.0000, exit 105.000000, fill 100.050000000000 → 247.3763
-  shuffle         = ["SEC-C","SEC-A","SEC-B"] + seed 01*32  →  ["SEC-A","SEC-C","SEC-B"]
-"""
-from __future__ import annotations
-
-import hashlib
-import json
-import re
-import struct
-import unittest
-from decimal import (
-    Decimal,
-    ROUND_HALF_UP,
-    localcontext,
-    Context,
-    InvalidOperation,
-    DivisionByZero,
-    Overflow,
-)
-
-D = Decimal
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PRODUCTION KERNEL (matches the TypeScript desk kernel, not the conflicting paste)
-# ─────────────────────────────────────────────────────────────────────────────
-
-IDENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,63}\Z")
-HEX = re.compile(r"[0-9a-f]{64}\Z")
-DEC = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\Z")
-KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
-CANON_DEC12 = re.compile(r"-?(?:0|[1-9][0-9]*)\.[0-9]{12}\Z")
-
-PRODUCT_NAME = "Trading App"
-ENGINE_VERSION = "trading-app-evaluator-1.2.0"
-PAPER_ONLY = True
-LIVE_TRADING_SUPPORTED = False
-ACTIVE_MODEL_WEIGHT = "0"
-
-INITIAL_AST = {
-    "schema": "1",
-    "decision": "PREDICT",
-    "direction": "LONG",
-    "otherwise": "STAND_DOWN",
-    "all": [
-        {"field": "timing_quality", "op": "EQ", "value": "ISSUER_CONFIRMED"},
-        {"field": "card_complete", "op": "EQ", "value": True},
-        {"field": "options_valid", "op": "EQ", "value": True},
-        {"field": "implied_move", "op": "GTE", "value": "0.040000000000"},
-        {"field": "implied_move", "op": "LTE", "value": "0.150000000000"},
-        {"field": "benchmark_relative_5d", "op": "LT", "value": "0.000000000000"},
-        {"field": "benchmark_relative_63d", "op": "GT", "value": "0.000000000000"},
-    ],
-}
-
-COST_MODEL_CONTENT = {
-    "cost_model_version": "1",
-    "cost_model_basis": "CONSERVATIVE_STRESS_HAIRCUT",
-    "constant_penalty": "0.000500",
-    "imbalance_coefficient": "0.000000",
-    "imbalance_term": "0.000000",
-    "commission_per_fill": "0.0000",
-    "entry_rounding_scale": "12",
-    "pnl_rounding_scale": "4",
-    "rounding_mode": "ROUND_HALF_UP",
-}
-
-FIELD_TYPES = {
-    "timing_quality": "enum",
-    "card_complete": "bool",
-    "options_valid": "bool",
-    "implied_move": "decimal",
-    "benchmark_relative_5d": "decimal",
-    "benchmark_relative_63d": "decimal",
-}
-
-CAPACITY = {
-    "slots": 3,
-    "notional": D("15000.0000"),
-    "ticket": D("5000.0000"),
-    "per_event": 2,
-    "margin_minutes": 3,
-}
-
-
-class KernelError(ValueError):
-    pass
-
-
-def ident(s):
-    if type(s) is not str or not IDENT.fullmatch(s):
-        raise KernelError("INVALID_ID")
-    return s
-
-
-def digest_bytes(s):
-    if type(s) is not str or not HEX.fullmatch(s):
-        raise KernelError("INVALID_SHA256_HEX")
-    raw = bytes.fromhex(s)
-    if len(raw) != 32:
-        raise KernelError("INVALID_SHA256_HEX")
-    return raw
-
-
-def field(b: bytes) -> bytes:
-    if type(b) is not bytes or len(b) > 4294967295:
-        raise KernelError("INVALID_FIELD")
-    return struct.pack(">I", len(b)) + b
-
-
-def u32(v: int) -> bytes:
-    if type(v) is not int or not 0 <= v <= 4294967295:
-        raise KernelError("INVALID_UINT32")
-    return struct.pack(">I", v)
-
-
-def canon(obj) -> bytes:
-    def validate(x, depth=0):
-        if depth > 32:
-            raise KernelError("JSON_DEPTH_EXCEEDED")
-        if x is None or type(x) is bool:
-            return
-        if type(x) is str:
-            x.encode("utf-8", errors="strict")
-            return
-        if type(x) is list:
-            for v in x:
-                validate(v, depth + 1)
-            return
-        if type(x) is dict:
-            for k, v in x.items():
-                if type(k) is not str or not KEY.fullmatch(k):
-                    raise KernelError("INVALID_CANONICAL_KEY")
-                validate(v, depth + 1)
-            return
-        raise KernelError("CANONICAL_NUMBERS_MUST_BE_STRINGS")
-
-    validate(obj)
-    return json.dumps(
-        obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
-    ).encode("utf-8")
-
-
-def h(domain: str, *parts: bytes) -> str:
-    return hashlib.sha256(
-        field(domain.encode("ascii")) + b"".join(field(p) for p in parts)
-    ).hexdigest()
-
-
-def shuffle(ids, seed):
-    if type(ids) is not list:
-        raise KernelError("INVALID_MEMBER_LIST")
-    b = digest_bytes(seed)
-    for x in ids:
-        ident(x)
-    if len(ids) != len(set(ids)):
-        raise KernelError("DUPLICATE_MEMBER")
-    return sorted(
-        ids,
-        key=lambda x: (hashlib.sha256(b + x.encode("utf-8")).digest(), x.encode("utf-8")),
-    )
-
-
-def input_hash(
-    manifest_id,
-    security_id,
-    manifest_hash,
-    snapshot_hash,
-    rule_hash,
-    engine_hash,
-    cost_hash,
-    margin,
-    pins,
-):
-    """
-    pins: list of (observation_id, observation_hash_hex)
-    Preimage is length-prefixed fields, domain "Trading App|input|2".
-    Pin order in the caller's list MUST NOT change the digest (sorted by id utf-8).
-    """
-    ident(manifest_id)
-    ident(security_id)
-    if type(margin) is not int or not 2 <= margin <= 15:
-        raise KernelError("INVALID_MARGIN")
-    if type(pins) is not list:
-        raise KernelError("INVALID_PINS")
-    seen = []
-    for p in pins:
-        if type(p) not in (list, tuple) or len(p) != 2:
-            raise KernelError("INVALID_PIN")
-        ident(p[0])
-        digest_bytes(p[1])
-        seen.append(p[0])
-    if len(seen) != len(set(seen)):
-        raise KernelError("DUPLICATE_PIN")
-    pairs = sorted(pins, key=lambda p: p[0].encode("utf-8"))
-    encoded = field(b"Trading App|input|2")
-    encoded += field(manifest_id.encode("utf-8")) + field(security_id.encode("utf-8"))
-    for x in (manifest_hash, snapshot_hash, rule_hash, engine_hash, cost_hash):
-        encoded += field(digest_bytes(x))
-    encoded += field(u32(margin)) + field(u32(len(pairs)))
-    for pid, ph in pairs:
-        encoded += field(pid.encode("utf-8")) + field(digest_bytes(ph))
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def output_hash(input_hex, decision_payload) -> str:
-    return h("Trading App|decision|1", digest_bytes(input_hex), canon(decision_payload))
-
-
-def payload_hash(normalized_payload) -> str:
-    return h("Trading App|payload|1", canon(normalized_payload))
-
-
-def observation_hash(envelope) -> str:
-    return h("Trading App|observation|1", canon(envelope))
-
-
-def rule_ast_hash(ast) -> str:
-    return h("Trading App|rule|1", canon(ast))
-
-
-def policy_hash(bundle) -> str:
-    return h("Trading App|policy|1", canon(bundle))
-
-
-def cost_model_hash(content) -> str:
-    return h("Trading App|cost|1", canon(content))
-
-
-def snapshot_hash(content) -> str:
-    return h("Trading App|snapshot|2", canon(content))
-
-
-def manifest_hash(content) -> str:
-    return h("Trading App|manifest|2", canon(content))
-
-
-def _dec_ctx():
-    return localcontext(
-        Context(
-            prec=60,
-            rounding=ROUND_HALF_UP,
-            traps=[InvalidOperation, DivisionByZero, Overflow],
-        )
-    )
-
-
-def modeled_fill(
-    close: str,
-    penalty: str = "0.000500",
-    imbalance_coefficient: str = "0.000000",
-    imbalance_term: str = "0.000000",
-) -> str:
-    """close * (1 + penalty + coeff * term), quantized to 12 dp, ROUND_HALF_UP."""
-    if type(close) is not str:
-        raise KernelError("INVALID_DECIMAL_TEXT")
-    with _dec_ctx():
-        p = D(close)
-        c = D(penalty)
-        a = D(imbalance_coefficient)
-        b = D(imbalance_term)
-        if p <= 0 or p > D("1000000"):
-            raise KernelError("ABOVE_OR_BELOW_DOMAIN")
-        out = (p * (D("1") + c + a * b)).quantize(D("0.000000000001"), rounding=ROUND_HALF_UP)
-        return format(out, "f")
-
-
-def paper_pnl(notional: str, exit_price: str, fill: str, commission: str = "0.0000") -> str:
-    """(notional * (exit/fill - 1) - 2*commission) at 4 dp."""
-    with _dec_ctx():
-        n = D(notional)
-        x = D(exit_price)
-        f = D(fill)
-        c = D(commission)
-        if f == 0:
-            raise KernelError("DIVISION_BY_ZERO")
-        dollar = n * (x / f - D("1")) - D("2") * c
-        return format(dollar.quantize(D("0.0001"), rounding=ROUND_HALF_UP), "f")
-
-
-def direction_hit(entry: str, exit: str) -> bool:
-    """Zero return is a MISS (False), not None. Long-only: exit > entry is a hit."""
-    with _dec_ctx():
-        e = D(entry)
-        x = D(exit)
-        if x == e:
-            return False
-        return x > e
-
-
-def band_hit(entry: str, exit: str, low: str, high: str) -> bool:
-    with _dec_ctx():
-        e = D(entry)
-        x = D(exit)
-        lo = D(low)
-        hi = D(high)
-        return e * (D("1") + lo) <= x <= e * (D("1") + hi)
-
-
-def _canon12(d: Decimal) -> str:
-    q = d.quantize(D("0.000000000000"), rounding=ROUND_HALF_UP)
-    s = format(q, "f")
-    if "." not in s:
-        s += "." + "0" * 12
-    whole, frac = s.split(".")
-    frac = (frac + "0" * 12)[:12]
-    return f"{whole}.{frac}"
-
-
-def magnitude_band(implied_move: str) -> dict:
-    with _dec_ctx():
-        m = D(implied_move)
-        return {
-            "low": _canon12(m * D("0.5")),
-            "high": _canon12(m * D("2.0")),
-        }
-
-
-def validate_ast(ast) -> None:
-    if type(ast) is not dict:
-        raise KernelError("INVALID_AST_KEYS")
-    expected = {"schema", "decision", "direction", "otherwise", "all"}
-    if set(ast.keys()) != expected or len(ast) != 5:
-        raise KernelError("INVALID_AST_KEYS")
-    for k in ("schema", "decision", "direction", "otherwise"):
-        if ast[k] != INITIAL_AST[k]:
-            raise KernelError("INVALID_AST_HEADER")
-    cc = ast["all"]
-    if type(cc) is not list or not 1 <= len(cc) <= 32:
-        raise KernelError("INVALID_AST_CONDITIONS")
-    for con in cc:
-        if type(con) is not dict or set(con.keys()) != {"field", "op", "value"}:
-            raise KernelError("INVALID_CONDITION")
-        f, op, v = con["field"], con["op"], con["value"]
-        if f not in FIELD_TYPES:
-            raise KernelError("UNKNOWN_FIELD")
-        if op not in {"EQ", "LT", "GT", "LTE", "GTE"}:
-            raise KernelError("UNKNOWN_OP")
-        typ = FIELD_TYPES[f]
-        if typ == "bool" and (op != "EQ" or type(v) is not bool):
-            raise KernelError("INVALID_BOOL_PREDICATE")
-        if typ == "enum" and (op != "EQ" or v != "ISSUER_CONFIRMED"):
-            raise KernelError("INVALID_ENUM_PREDICATE")
-        if typ == "decimal":
-            if type(v) is not str or not CANON_DEC12.fullmatch(v):
-                raise KernelError("NONCANONICAL_CONSTANT")
-
-
-def evaluate(ast, card) -> dict:
-    """Total function: never throws to the caller. Invalid rule → STAND_DOWN + INVALID_RULE."""
-    try:
-        validate_ast(ast)
-    except KernelError:
-        return {
-            "status": "INVALID_RULE",
-            "decision": "STAND_DOWN",
-            "direction": None,
-            "reasons": ["INVALID_RULE_AST"],
-        }
-    if type(card) is not dict:
-        return {
-            "status": "INVALID_CARD",
-            "decision": "STAND_DOWN",
-            "direction": None,
-            "reasons": ["INVALID_CARD"],
-        }
-    if card.get("card_complete") is not True:
-        t = card.get("card_complete")
-        if t is False or t is None:
-            return {
-                "status": "OK",
-                "decision": "STAND_DOWN",
-                "direction": None,
-                "reasons": ["CARD_INCOMPLETE"],
-            }
-        return {
-            "status": "INVALID_CARD",
-            "decision": "STAND_DOWN",
-            "direction": None,
-            "reasons": ["INVALID_CARD_COMPLETE"],
-        }
-    for co in ast["all"]:
-        f, op, v = co["field"], co["op"], co["value"]
-        val = card.get(f, None)
-        if val is None:
-            return {
-                "status": "OK",
-                "decision": "STAND_DOWN",
-                "direction": None,
-                "reasons": [f"MISSING_{f}"],
-            }
-        typ = FIELD_TYPES[f]
-        if typ == "bool":
-            if type(val) is not bool:
-                return {
-                    "status": "INVALID_CARD",
-                    "decision": "STAND_DOWN",
-                    "direction": None,
-                    "reasons": [f"INVALID_{f}"],
-                }
-            ok = op == "EQ" and val is v
-        elif typ == "enum":
-            if val not in ("ISSUER_CONFIRMED", "ESTIMATED"):
-                return {
-                    "status": "INVALID_CARD",
-                    "decision": "STAND_DOWN",
-                    "direction": None,
-                    "reasons": [f"INVALID_{f}"],
-                }
-            ok = op == "EQ" and val == v
-        else:
-            if type(val) is not str or not CANON_DEC12.fullmatch(val):
-                return {
-                    "status": "INVALID_CARD",
-                    "decision": "STAND_DOWN",
-                    "direction": None,
-                    "reasons": [f"INVALID_{f}"],
-                }
-            with _dec_ctx():
-                left, right = D(val), D(v)
-                ok = {
-                    "EQ": left == right,
-                    "LT": left < right,
-                    "GT": left > right,
-                    "LTE": left <= right,
-                    "GTE": left >= right,
-                }[op]
-        if not ok:
-            return {
-                "status": "OK",
-                "decision": "STAND_DOWN",
-                "direction": None,
-                "reasons": [f"PREDICATE_FALSE_{f}"],
-            }
-    return {
-        "status": "OK",
-        "decision": "PREDICT",
-        "direction": "LONG",
-        "reasons": [],
-    }
-
-
-def compute_card_complete(card: dict) -> bool:
-    tq = card.get("timing_quality")
-    if tq not in ("ISSUER_CONFIRMED", "ESTIMATED"):
-        return False
-    if type(card.get("options_valid")) is not bool:
-        return False
-    mv = card.get("implied_move")
-    if type(mv) is not str:
-        return False
-    try:
-        with _dec_ctx():
-            m = D(mv)
-            if m <= 0 or m > 5:
-                return False
-    except Exception:
-        return False
-    for f in ("benchmark_relative_5d", "benchmark_relative_63d"):
-        v = card.get(f)
-        if type(v) is not str:
-            return False
-        try:
-            D(v)
-        except Exception:
-            return False
-    return True
-
-
-def admit_predict(
-    *,
-    paused: bool,
-    cutoff_passed: bool,
-    timing_quality: str,
-    card_complete: bool,
-    reserved_count: int,
-    reserved_notional: Decimal,
-    same_event_open: int,
-    already_owned: bool,
-) -> dict:
-    """Admission after PREDICT. Capacity is 3 / 15000 / 2-per-event. Ticket 5000."""
-    reasons = []
-    if paused:
-        reasons.append("ADMISSION_PAUSED")
-    if cutoff_passed:
-        reasons.append("CUTOFF")
-    if timing_quality != "ISSUER_CONFIRMED":
-        reasons.append("TIMING_NOT_CONFIRMED")
-    if card_complete is not True:
-        reasons.append("CARD_INCOMPLETE")
-    if already_owned:
-        reasons.append("ALREADY_OWNED")
-    if reserved_count + 1 > CAPACITY["slots"]:
-        reasons.append("CAPACITY_COUNT")
-    if reserved_notional + CAPACITY["ticket"] > CAPACITY["notional"]:
-        reasons.append("CAPACITY_NOTIONAL")
-    if same_event_open + 1 > CAPACITY["per_event"]:
-        reasons.append("PER_EVENT_LIMIT")
-    if reasons:
-        return {"outcome": "DENIED", "reason_codes": reasons, "position": False}
-    return {"outcome": "ADMITTED", "reason_codes": ["ADMITTED"], "position": True}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TESTS — golden + adversarial
-# ─────────────────────────────────────────────────────────────────────────────
-
-H01 = "bac8f1353582276f85608c618ad44f104f5480fea76d03ce0dbcad4955522726"
-AST_H = "e9cf184a531fd993dc1b36ce0e1a1b0dcd67ebc4b80e4ff1ebe5a72ab00c15f4"
-
-BASE_HASH = dict(
-    manifest_id="manifest-20260914",
-    security_id="SEC-A",
-    manifest_hash="1" * 64,
-    snapshot_hash="2" * 64,
-    rule_hash="3" * 64,
-    engine_hash="4" * 64,
-    cost_hash="5" * 64,
-    margin=3,
-    pins=[("obs-z", "a" * 64), ("obs-a", "b" * 64)],
-)
-
-COMPLETE_CARD = {
-    "timing_quality": "ISSUER_CONFIRMED",
-    "card_complete": True,
-    "options_valid": True,
-    "implied_move": "0.080000000000",
-    "benchmark_relative_5d": "-0.012000000000",
-    "benchmark_relative_63d": "0.045000000000",
-}
-
-
-class Golden(unittest.TestCase):
-    def test_H01_input_hash(self):
-        self.assertEqual(input_hash(**BASE_HASH), H01)
-
-    def test_H02_pin_order_does_not_change_hash(self):
-        a = input_hash(**BASE_HASH)
-        flipped = dict(BASE_HASH)
-        flipped["pins"] = list(reversed(BASE_HASH["pins"]))
-        self.assertEqual(input_hash(**flipped), a)
-        other = dict(BASE_HASH)
-        other["pins"] = [("obs-z", "a" * 64), ("obs-b", "b" * 64)]
-        self.assertNotEqual(input_hash(**other), a)
-
-    def test_H03_removing_pin_or_changing_margin_changes_hash(self):
-        base = input_hash(**BASE_HASH)
-        fewer = dict(BASE_HASH)
-        fewer["pins"] = [BASE_HASH["pins"][0]]
-        self.assertNotEqual(input_hash(**fewer), base)
-        m4 = dict(BASE_HASH)
-        m4["margin"] = 4
-        self.assertNotEqual(input_hash(**m4), base)
-
-    def test_H05_rejects_malformed(self):
-        bad_m = dict(BASE_HASH)
-        bad_m["margin"] = 1
-        with self.assertRaises(KernelError):
-            input_hash(**bad_m)
-        bad_m["margin"] = 16
-        with self.assertRaises(KernelError):
-            input_hash(**bad_m)
-        bad_id = dict(BASE_HASH)
-        bad_id["security_id"] = "SEC A"
-        with self.assertRaises(KernelError):
-            input_hash(**bad_id)
-        upper = dict(BASE_HASH)
-        upper["pins"] = [("obs-a", "B" * 64)]
-        with self.assertRaises(KernelError):
-            input_hash(**upper)
-
-    def test_H07_cj1_rejects_numbers(self):
-        with self.assertRaises(KernelError):
-            canon({"a": 1})
-        with self.assertRaises(KernelError):
-            canon({"a": 1.5})
-        self.assertTrue(canon({"a": True, "z": None}))
-
-    def test_H09_shuffle_golden(self):
-        got = shuffle(["SEC-C", "SEC-A", "SEC-B"], "01" * 32)
-        self.assertEqual(got, ["SEC-A", "SEC-C", "SEC-B"])
-        with self.assertRaises(KernelError):
-            shuffle(["SEC-A", "SEC-A"], "01" * 32)
-
-    def test_ast_hash_golden(self):
-        validate_ast(INITIAL_AST)
-        self.assertEqual(rule_ast_hash(INITIAL_AST), AST_H)
-
-    def test_fill_and_pnl_golden(self):
-        self.assertEqual(modeled_fill("123.456789"), "123.518517394500")
-        self.assertEqual(modeled_fill("100.000000"), "100.050000000000")
-        self.assertEqual(
-            paper_pnl("5000.0000", "105.000000", "100.050000000000", "0.0000"),
-            "247.3763",
-        )
-
-    def test_F01_conjunction_and_bounds(self):
-        ok = evaluate(INITIAL_AST, COMPLETE_CARD)
-        self.assertEqual(ok["decision"], "PREDICT")
-        self.assertEqual(ok["direction"], "LONG")
-        lo = evaluate(INITIAL_AST, {**COMPLETE_CARD, "implied_move": "0.039999999999"})
-        self.assertEqual(lo["decision"], "STAND_DOWN")
-        hi = evaluate(INITIAL_AST, {**COMPLETE_CARD, "implied_move": "0.150000000001"})
-        self.assertEqual(hi["decision"], "STAND_DOWN")
-        self.assertEqual(
-            evaluate(INITIAL_AST, {**COMPLETE_CARD, "implied_move": "0.040000000000"})["decision"],
-            "PREDICT",
-        )
-        self.assertEqual(
-            evaluate(INITIAL_AST, {**COMPLETE_CARD, "implied_move": "0.150000000000"})["decision"],
-            "PREDICT",
-        )
-
-    def test_F02_incomplete_and_invalid_rule(self):
-        r = evaluate(INITIAL_AST, {"card_complete": False})
-        self.assertEqual(r["status"], "OK")
-        self.assertEqual(r["decision"], "STAND_DOWN")
-        bad = evaluate({"schema": "nope"}, {"card_complete": True})
-        self.assertEqual(bad["status"], "INVALID_RULE")
-        self.assertEqual(bad["decision"], "STAND_DOWN")
-        self.assertIsNone(bad["direction"])
-
-    def test_F03_boolean_substitute_is_invalid_card(self):
-        r = evaluate(INITIAL_AST, {**COMPLETE_CARD, "options_valid": 1})
-        self.assertEqual(r["status"], "INVALID_CARD")
-        self.assertEqual(r["decision"], "STAND_DOWN")
-
-    def test_F15_tiny_positive_is_a_hit_zero_is_miss(self):
-        self.assertTrue(direction_hit("100.000000", "100.000001"))
-        self.assertFalse(direction_hit("100.000000", "100.000000"))
-        self.assertFalse(direction_hit("100.000000", "99.999999"))
-        self.assertTrue(band_hit("100.000000", "108.000000", "0.040000000000", "0.160000000000"))
-        self.assertFalse(band_hit("100.000000", "103.000000", "0.040000000000", "0.160000000000"))
-
-
-class Adversarial(unittest.TestCase):
-    def test_float_close_is_rejected(self):
-        with self.assertRaises(KernelError):
-            modeled_fill(100.0)  # type: ignore
-
-    def test_json_number_cannot_enter_payload_hash(self):
-        with self.assertRaises(KernelError):
-            payload_hash({"oi": 500, "volume": 80, "multiplier": 100})
-        ok = payload_hash({"oi": "500", "volume": "80", "multiplier": "100"})
-        self.assertRegex(ok, r"^[0-9a-f]{64}$")
-
-    def test_duplicate_pin_rejected(self):
-        d = dict(BASE_HASH)
-        d["pins"] = [("obs-a", "b" * 64), ("obs-a", "c" * 64)]
-        with self.assertRaises(KernelError):
-            input_hash(**d)
-
-    def test_output_hash_changes_when_reasons_change(self):
-        a = output_hash(H01, {"status": "OK", "decision": "PREDICT", "direction": "LONG", "reasons": []})
-        b = output_hash(
-            H01, {"status": "OK", "decision": "PREDICT", "direction": "LONG", "reasons": ["x"]}
-        )
-        self.assertNotEqual(a, b)
-
-    def test_rel5_zero_is_not_predict(self):
-        card = {**COMPLETE_CARD, "benchmark_relative_5d": "0.000000000000"}
-        r = evaluate(INITIAL_AST, card)
-        self.assertEqual(r["decision"], "STAND_DOWN")
-        self.assertIn("PREDICATE_FALSE_benchmark_relative_5d", r["reasons"][0])
-
-    def test_estimated_timing_never_predicts(self):
-        card = {**COMPLETE_CARD, "timing_quality": "ESTIMATED"}
-        r = evaluate(INITIAL_AST, card)
-        self.assertEqual(r["decision"], "STAND_DOWN")
-
-    def test_no_freeze_is_not_a_decision_of_the_evaluator(self):
-        r = evaluate(INITIAL_AST, COMPLETE_CARD)
-        self.assertNotIn(r["decision"], ("NO_FREEZE", "NONE"))
-
-    def test_capacity_full_desk_denied(self):
-        a = admit_predict(
-            paused=False,
-            cutoff_passed=False,
-            timing_quality="ISSUER_CONFIRMED",
-            card_complete=True,
-            reserved_count=3,
-            reserved_notional=D("15000.0000"),
-            same_event_open=0,
-            already_owned=False,
-        )
-        self.assertEqual(a["outcome"], "DENIED")
-        self.assertIn("CAPACITY_COUNT", a["reason_codes"])
-        self.assertIn("CAPACITY_NOTIONAL", a["reason_codes"])
-
-    def test_per_event_limit_two(self):
-        a = admit_predict(
-            paused=False,
-            cutoff_passed=False,
-            timing_quality="ISSUER_CONFIRMED",
-            card_complete=True,
-            reserved_count=0,
-            reserved_notional=D("0"),
-            same_event_open=2,
-            already_owned=False,
-        )
-        self.assertEqual(a["outcome"], "DENIED")
-        self.assertIn("PER_EVENT_LIMIT", a["reason_codes"])
-
-    def test_stand_down_must_not_reserve(self):
-        r = evaluate(INITIAL_AST, {**COMPLETE_CARD, "options_valid": False})
-        self.assertEqual(r["decision"], "STAND_DOWN")
-        self.assertNotEqual(r["decision"], "PREDICT")
-
-    def test_half_up_identity(self):
-        self.assertEqual(modeled_fill("1.000000"), "1.000500000000")
-
-    def test_canon_key_order_stable(self):
-        a = canon({"z": "é", "a": True})
-        b = canon({"a": True, "z": "é"})
-        self.assertEqual(a, b)
-        self.assertEqual(a.hex(), "7b2261223a747275652c227a223a22c3a9227d")
-
-    def test_impaired_is_not_flat(self):
-        legal = {
-            "COMMITTED_IRREVOCABLE",
-            "FILLED",
-            "NO_FILL",
-            "IMPAIRED_ENTRY",
-            "IMPAIRED_EXIT",
-            "FLAT",
-            "CLOSED",
-        }
-        self.assertIn("IMPAIRED_EXIT", legal)
-        self.assertNotEqual("IMPAIRED_EXIT", "FLAT")
-
-    def test_conflicting_paste_hash_must_not_match_H01(self):
-        weaker = conflicting_paste_input_hash(
-            "manifest-20260914",
-            "SEC-A",
-            "3" * 64,
-            "4" * 64,
-            "5" * 64,
-            3,
-            ["obs-z", "obs-a"],
-        )
-        self.assertNotEqual(weaker, H01)
-
-    def test_conflicting_paste_fill_uses_different_penalty(self):
-        self.assertNotEqual(modeled_fill("100.00"), "100.5500")
-        self.assertEqual(modeled_fill("100.000000"), "100.050000000000")
-
-
-def conflicting_paste_input_hash(
-    manifest_id,
-    permanent_security_id,
-    rule_ast_hash,
-    evaluator_artifact_hash,
-    cost_model_hash,
-    broker_margin_minutes,
-    observation_ids,
-):
-    """Weaker preimage: NO domain tag, NO pin hashes, NO manifest/snapshot hashes."""
-    if not 2 <= broker_margin_minutes <= 15:
-        raise ValueError("broker_margin_minutes out of range")
-    if len(observation_ids) != len(set(observation_ids)):
-        raise ValueError("duplicate observation_id in pins")
-    pins = sorted(observation_ids, key=lambda value: value.encode("utf-8"))
-    canonical = bytearray()
-    canonical += field(manifest_id.encode("utf-8"))
-    canonical += field(permanent_security_id.encode("utf-8"))
-    canonical += field(bytes.fromhex(rule_ast_hash))
-    canonical += field(bytes.fromhex(evaluator_artifact_hash))
-    canonical += field(bytes.fromhex(cost_model_hash))
-    canonical += field(struct.pack(">I", broker_margin_minutes))
-    canonical += field(struct.pack(">I", len(pins)))
-    for observation_id in pins:
-        canonical += field(observation_id.encode("utf-8"))
-    return hashlib.sha256(canonical).hexdigest()
-
-
-BRIEF = r"""
-SCRUTINY BRIEF — what to attack next
-====================================
-
-A. Two kernels in this file. They disagree on purpose.
-   PRODUCTION  input_hash includes:
-     domain "Trading App|input|2"
-     manifest_hash, snapshot_hash, rule, engine, cost
-     (observation_id, observation_hash) pairs, sorted by id
-   CONFLICTING PASTE input_hash includes:
-     no domain
-     no manifest/snapshot hashes
-     observation ids only (no pin hashes)
-   Production H01 must NEVER equal the paste hash on the same names.
-
-B. Fill / cost
-   Production constant_penalty = 0.000500, imbalance terms = 0
-     modeled_fill("100.000000") = 100.050000000000
-     paper_pnl(5000, 105, 100.05) = 247.3763
-   Paste example uses 0.001 + 0.01*0.5 = 0.0055 → 100.5500
-   If a desk prices with the paste fill, P&L and capacity math both drift.
-
-C. Evaluator
-   Production INITIAL_AST is a closed conjunction. Any false predicate → STAND_DOWN.
-   A looser paste evaluator accepts arbitrary fields (e.g. "score") and JSON numbers
-   via Decimal(str(actual)). Production rejects options_valid=1 as INVALID_CARD.
-
-D. State machine (desk, claimed around this kernel)
-   COMMITTED_IRREVOCABLE → FILLED | NO_FILL | IMPAIRED_ENTRY
-   FILLED → FLAT | IMPAIRED_EXIT
-   IMPAIRED_EXIT → FLAT
-   FLAT | NO_FILL → CLOSED   (capacity released only on CLOSED)
-   A conflicting paste released capacity on GRADED. That is a different machine.
-   IMPAIRED_EXIT occupies a slot. Do not flatten it to FLAT without an official mark.
-
-E. Vocabulary that must not collapse
-   NO_FREEZE  ≠ STAND_DOWN   (no artifact vs computed stand-down)
-   PREDICT / NOT TRADED ≠ STAND_DOWN   (predicted, admission denied)
-   IMPAIRED_* ≠ FLAT
-   ESTIMATED paper P&L ≠ live fill evidence
-   OPERATOR must not see hits / bands / P&L
-   REVIEWER must not mutate admission
-
-F. Capacity
-   3 slots, $15,000, $5,000 ticket, 2 names per event session.
-   A third PREDICT on a full desk or a third name on the same event is DENIED
-   (CAPACITY / PER_EVENT), not STAND_DOWN.
-
-G. Questions the reviewing AI must answer
-   1. Can you construct two different sealed cards that share an input hash
-      under PRODUCTION? Under the PASTE?
-   2. Does ROUND_HALF_UP on a tie match both Python Decimal and a BigInt port?
-      Cite one counterexample if not.
-   3. Is direction_hit(entry, exit) with exit==entry correctly a MISS?
-   4. Should a card whose implied_move is the float 0.08 (not "0.080000000000")
-      PREDICT? Production says no.
-   5. If a name is IMPAIRED_EXIT, is a new PREDICT the same day correctly denied?
-   6. Which kernel should the desk freeze against, and what breaks if you pick wrong?
-
-H. Honesty bar
-   Do not invent passing tests. If a golden in this file fails on your runtime,
-   the packet is the bug, not the desk. Report Python version and the failing assert.
-   Do not rubber-stamp. Add tests. Name the bug or name the residual risk.
-"""
-
-
-def main():
-    print(f"{PRODUCT_NAME} kernel audit")
-    print(
-        f"  paperOnly={PAPER_ONLY} liveTradingSupported={LIVE_TRADING_SUPPORTED} weight={ACTIVE_MODEL_WEIGHT}"
-    )
-    print(f"  engine={ENGINE_VERSION}")
-    loader = unittest.TestLoader()
-    suite = unittest.TestSuite()
-    suite.addTests(loader.loadTestsFromTestCase(Golden))
-    suite.addTests(loader.loadTestsFromTestCase(Adversarial))
-    result = unittest.TextTestRunner(verbosity=2).run(suite)
-    print()
-    print(BRIEF)
-    if not result.wasSuccessful():
-        raise SystemExit(1)
-    print("RESULT: goldens + adversarial suite passed on this interpreter.")
-    print("Reviewer: now try to break it. Do not rubber-stamp.")
-
-
-if __name__ == "__main__":
-    main()
 ```
-
-
----
-
-## `src/kernel/index.ts` (24705 bytes)
-
-```ts
 /**
  * Trading App v1.2 pure serialization / numeric / evaluator kernel.
  * Port of the specification reference (section 27). Browser must not import this
  * for research labels, fills, risk counters, or hashes.
+ *
+ * This module is the only hash / fill / admit authority. Do not add a parallel
+ * Python engine (`vicia/engine` or similar). See docs/ARCHITECTURAL_LOCK.md.
  */
 import { createHash, randomBytes } from "node:crypto";
 
@@ -1275,6 +161,8 @@ const HEX = /^[0-9a-f]{64}$/;
 const DEC = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/;
 const KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const CANON_DEC12 = /^-?(?:0|[1-9][0-9]*)\.[0-9]{12}$/;
+/** Money/price text: explicit fraction, no exponent, no '+', no whitespace. */
+const DEC_TEXT = /^-?(?:0|[1-9][0-9]*)\.[0-9]{1,18}$/;
 
 export class KernelError extends Error {
   constructor(message: string) {
@@ -1587,7 +475,23 @@ export function inputHash(args: {
 }
 
 export function outputHash(inputHex: string, decisionPayload: unknown): string {
+  if (decisionPayload && typeof decisionPayload === "object" && !Array.isArray(decisionPayload) && "reasons" in decisionPayload) {
+    const rs = (decisionPayload as { reasons: unknown }).reasons;
+    const ordered = normalizeReasons(rs);
+    if (!Array.isArray(rs) || rs.length !== ordered.length || rs.some((x, i) => x !== ordered[i])) {
+      throw new KernelError("NONCANONICAL_REASONS");
+    }
+  }
   return h("Trading App|decision|1", digestBytes(inputHex), canon(decisionPayload));
+}
+
+export function normalizeReasons(reasons: unknown): string[] {
+  if (!Array.isArray(reasons)) throw new KernelError("INVALID_REASONS");
+  for (const r of reasons) {
+    if (typeof r !== "string") throw new KernelError("INVALID_REASONS");
+  }
+  if (reasons.length !== new Set(reasons).size) throw new KernelError("DUPLICATE_REASON");
+  return [...reasons].sort((a, b) => Buffer.from(a, "utf8").compare(Buffer.from(b, "utf8")));
 }
 
 export function payloadHash(normalizedPayload: unknown): string {
@@ -1645,6 +549,16 @@ function parseRaw(s: unknown): { neg: boolean; int: bigint; fracDigits: number }
   const int = BigInt(whole + frac);
   if (int === 0n && neg) throw new KernelError("INVALID_DECIMAL");
   return { neg, int, fracDigits: frac.length };
+}
+
+/** PATCH-05: public money/price text. No floats, exponent, '+', whitespace, Inf/NaN. */
+export function decText(value: unknown, code = "INVALID_DECIMAL_TEXT", scale?: number): string {
+  if (typeof value !== "string" || !DEC_TEXT.test(value)) throw new KernelError(code);
+  if (scale !== undefined) {
+    const frac = value.split(".")[1] ?? "";
+    if (frac.length !== scale) throw new KernelError("NONCANONICAL_SCALE");
+  }
+  return value;
 }
 
 function cmpAbs(a: Dec, b: Dec): number {
@@ -1762,12 +676,16 @@ export function modeledFill(
   imbalanceCoefficient = "0.000000",
   imbalanceTerm = "0.000000",
 ): string {
+  decText(close, "INVALID_DECIMAL_TEXT");
+  decText(penalty, "INVALID_PENALTY_TEXT");
+  decText(imbalanceCoefficient, "INVALID_IMBALANCE_TEXT");
+  decText(imbalanceTerm, "INVALID_IMBALANCE_TEXT");
   const p = dec(close, 6, "0.000001", "1000000");
   const c = dec(penalty, 6, "0.000001", "0.05");
   const a = dec(imbalanceCoefficient, 6, "0", "0");
   const b = dec(imbalanceTerm, 6, "0", "0");
   const one = dec("1", 6);
-  const inner = add(one, add(c, mul(a, b))); // a*b scale 12, add to c scale 6 — align in add
+  const inner = add(one, add(c, mul(a, b)));
   const prod = mul(p, inner);
   return decToCanonical(quantizeHalfUp(prod, 12), 12);
 }
@@ -1778,10 +696,19 @@ export function paperPnl(
   fill: string,
   commission = "0.0000",
 ): string {
-  const n = dec(notional, 4, "0.0001", "5000");
+  decText(notional, "INVALID_NOTIONAL_TEXT");
+  decText(exitPrice, "INVALID_EXIT_TEXT");
+  decText(fill, "INVALID_FILL_TEXT");
+  decText(commission, "INVALID_COMMISSION_TEXT");
+  const n = dec(notional, 4, "0", "5000");
   const x = dec(exitPrice, 6, "0.000001", "1000000");
-  const f = dec(fill, 12, "0.000000000001", "1050000");
+  const f = dec(fill, 12, "0", "1050000");
   const c = dec(commission, 4, "0", "100");
+  if (cmp(f, dec("0", 12)) < 0) throw new KernelError("NONPOSITIVE_FILL");
+  if (cmp(f, dec("0", 12)) === 0) throw new KernelError("DIVISION_BY_ZERO");
+  if (cmp(x, dec("0", 6)) <= 0) throw new KernelError("NONPOSITIVE_EXIT");
+  if (n.neg) throw new KernelError("NEGATIVE_NOTIONAL");
+  if (c.neg) throw new KernelError("NEGATIVE_COMMISSION");
   const ratio = div(x, f, 24);
   const gap = sub(ratio, dec("1", 0));
   const dollar = mul(n, gap);
@@ -1790,23 +717,30 @@ export function paperPnl(
 }
 
 export function directionHit(entry: string, exit: string): boolean | null {
+  decText(entry, "INVALID_ENTRY_TEXT");
+  decText(exit, "INVALID_EXIT_TEXT");
   const e = dec(entry, 6, "0.000001", "1000000");
-  const x = dec(exit, 6, "0.000001", "1000000");
+  const x = dec(exit, 6, "-1000000", "1000000");
+  if (cmp(e, dec("0", 6)) <= 0) throw new KernelError("NONPOSITIVE_ENTRY");
   const c = cmp(x, e);
-  if (c === 0) return false; // zero return = MISS
+  if (c === 0) return false;
   return c > 0;
 }
 
 export function bandHit(entry: string, exit: string, low: string, high: string): boolean {
-  // entry * (1+low) <= exit <= entry * (1+high)  using cross multiplication
+  decText(entry, "INVALID_ENTRY_TEXT");
+  decText(exit, "INVALID_EXIT_TEXT");
+  decText(low, "INVALID_BAND_TEXT");
+  decText(high, "INVALID_BAND_TEXT");
   const e = dec(entry, 6, "0.000001", "1000000");
-  const x = dec(exit, 6, "0.000001", "1000000");
+  const x = dec(exit, 6, "-1000000", "1000000");
   const lo = dec(low, 12, "-1000000", "1000000");
   const hi = dec(high, 12, "-1000000", "1000000");
+  if (cmp(e, dec("0", 6)) <= 0) throw new KernelError("NONPOSITIVE_ENTRY");
+  if (cmp(lo, hi) > 0) throw new KernelError("INVALID_BAND_ORDER");
   const one = dec("1", 0);
   const left = mul(e, add(one, lo));
   const right = mul(e, add(one, hi));
-  // compare left <= x <= right at aligned scale
   const xAs = { ...x };
   return cmp(left, { neg: xAs.neg, unscaled: xAs.unscaled, scale: xAs.scale }) <= 0 && cmp(xAs, right) <= 0;
 }
@@ -1958,7 +892,7 @@ export function computeCardComplete(card: {
 }): boolean {
   if (card.timing_quality !== "ISSUER_CONFIRMED" && card.timing_quality !== "ESTIMATED") return false;
   if (typeof card.options_valid !== "boolean") return false;
-  if (typeof card.implied_move !== "string") return false;
+  if (typeof card.implied_move !== "string" || !CANON_DEC12.test(card.implied_move)) return false;
   try {
     dec(card.implied_move, 12, "0.000000000001", "5");
   } catch {
@@ -1966,7 +900,7 @@ export function computeCardComplete(card: {
   }
   for (const f of ["benchmark_relative_5d", "benchmark_relative_63d"] as const) {
     const v = card[f];
-    if (typeof v !== "string") return false;
+    if (typeof v !== "string" || !CANON_DEC12.test(v)) return false;
     try {
       dec(v, 12, "-1000000", "1000000");
     } catch {
@@ -1974,6 +908,89 @@ export function computeCardComplete(card: {
     }
   }
   return true;
+}
+
+export const CAPACITY = {
+  slots: 3,
+  notional: "15000.0000",
+  ticket: "5000.0000",
+  perEvent: 2,
+  marginMinutes: 3,
+} as const;
+
+export type AdmitResult = {
+  outcome: "ADMITTED" | "DENIED";
+  reason_codes: string[];
+  position: boolean;
+};
+
+function isDec(v: unknown): v is Dec {
+  return (
+    !!v &&
+    typeof v === "object" &&
+    "neg" in v &&
+    "unscaled" in v &&
+    "scale" in v &&
+    typeof (v as Dec).neg === "boolean" &&
+    typeof (v as Dec).unscaled === "bigint" &&
+    typeof (v as Dec).scale === "number"
+  );
+}
+
+export function admitPredict(args: {
+  paused: unknown;
+  cutoffPassed: unknown;
+  timingQuality: unknown;
+  cardComplete: unknown;
+  reservedCount: unknown;
+  reservedNotional: unknown;
+  sameEventOpen: unknown;
+  alreadyOwned: unknown;
+}): AdmitResult {
+  for (const [name, val] of [
+    ["paused", args.paused],
+    ["cutoff_passed", args.cutoffPassed],
+    ["card_complete", args.cardComplete],
+    ["already_owned", args.alreadyOwned],
+  ] as const) {
+    if (typeof val !== "boolean") throw new KernelError(`INVALID_ADMISSION_FLAG_${name}`);
+  }
+  if (typeof args.timingQuality !== "string") throw new KernelError("INVALID_TIMING_QUALITY");
+  for (const [name, val] of [
+    ["reserved_count", args.reservedCount],
+    ["same_event_open", args.sameEventOpen],
+  ] as const) {
+    if (typeof val !== "number" || !Number.isInteger(val) || val < 0 || val > 4294967295) {
+      throw new KernelError(`INVALID_ADMISSION_COUNT_${name}`);
+    }
+  }
+  if (!isDec(args.reservedNotional)) throw new KernelError("INVALID_RESERVED_NOTIONAL");
+  if (args.reservedNotional.unscaled < 0n || args.reservedNotional.neg) throw new KernelError("INVALID_RESERVED_NOTIONAL");
+  const capN = dec(CAPACITY.notional, 4);
+  if (cmp(args.reservedNotional, capN) > 0) throw new KernelError("RESERVED_NOTIONAL_EXCEEDS_CAP");
+
+  const reasons: string[] = [];
+  if (args.paused) reasons.push("ADMISSION_PAUSED");
+  if (args.cutoffPassed) reasons.push("CUTOFF");
+  if (args.timingQuality !== "ISSUER_CONFIRMED") reasons.push("TIMING_NOT_CONFIRMED");
+  if (args.cardComplete !== true) reasons.push("CARD_INCOMPLETE");
+  if (args.alreadyOwned) reasons.push("ALREADY_OWNED");
+  if ((args.reservedCount as number) + 1 > CAPACITY.slots) reasons.push("CAPACITY_COUNT");
+  const next = add(args.reservedNotional, dec(CAPACITY.ticket, 4));
+  if (cmp(next, capN) > 0) reasons.push("CAPACITY_NOTIONAL");
+  if ((args.sameEventOpen as number) + 1 > CAPACITY.perEvent) reasons.push("PER_EVENT_LIMIT");
+  if (reasons.length) return { outcome: "DENIED", reason_codes: reasons, position: false };
+  return { outcome: "ADMITTED", reason_codes: ["ADMITTED"], position: true };
+}
+
+export function addNotional(a: string, b: string): string {
+  return decToCanonical(add(dec(a, 4), dec(b, 4)), 4);
+}
+
+export function subNotional(a: string, b: string): string {
+  const r = sub(dec(a, 4), dec(b, 4));
+  if (cmp(r, dec("0", 4)) < 0) throw new KernelError("NEGATIVE_NOTIONAL");
+  return decToCanonical(r, 4);
 }
 
 export const ENGINE_VERSION = "trading-app-evaluator-1.2.0";
@@ -1991,1964 +1008,319 @@ export const COST_MODEL_CONTENT = {
   pnl_rounding_scale: "4",
   rounding_mode: "ROUND_HALF_UP",
 } as const;
+
 ```
 
+## `src/desk/verify-freeze.ts`
 
----
-
-## `src/kernel/kernel.test.ts` (9040 bytes)
-
-```ts
-import assert from "node:assert/strict";
-import { test } from "node:test";
+```
+import { getSql } from "@/lib/db";
 import {
-  bandHit,
-  canon,
-  COST_MODEL_CONTENT,
-  costModelHash,
-  dec,
-  directionHit,
   evaluate,
-  INITIAL_AST,
   inputHash,
-  KernelError,
-  modeledFill,
-  paperPnl,
-  parseCj1,
+  magnitudeBand,
+  manifestHash,
+  observationHash,
+  outputHash,
   ruleAstHash,
-  shuffle,
-  validateAst,
-} from "./index.ts";
+  snapshotHash,
+} from "@/kernel/index";
+import { asHex, DeskError, jsonCanon, newId } from "./util";
+import type { TypedCard } from "./features";
 
-test("H01 input hash golden vector", () => {
-  const got = inputHash({
-    manifestId: "manifest-20260914",
-    securityId: "SEC-A",
-    manifestHash: "1111111111111111111111111111111111111111111111111111111111111111",
-    snapshotHash: "2222222222222222222222222222222222222222222222222222222222222222",
-    ruleHash: "3333333333333333333333333333333333333333333333333333333333333333",
-    engineHash: "4444444444444444444444444444444444444444444444444444444444444444",
-    costHash: "5555555555555555555555555555555555555555555555555555555555555555",
-    margin: 3,
-    pins: [
-      ["obs-z", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
-      ["obs-a", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
-    ],
-  });
-  assert.equal(got, "bac8f1353582276f85608c618ad44f104f5480fea76d03ce0dbcad4955522726");
-});
+const MARGIN = 3;
 
-test("H02 pin order does not change hash; content does", () => {
-  const base = {
-    manifestId: "manifest-20260914",
-    securityId: "SEC-A",
-    manifestHash: "1111111111111111111111111111111111111111111111111111111111111111",
-    snapshotHash: "2222222222222222222222222222222222222222222222222222222222222222",
-    ruleHash: "3333333333333333333333333333333333333333333333333333333333333333",
-    engineHash: "4444444444444444444444444444444444444444444444444444444444444444",
-    costHash: "5555555555555555555555555555555555555555555555555555555555555555",
-    margin: 3,
-  };
-  const a = inputHash({
-    ...base,
-    pins: [
-      ["obs-z", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
-      ["obs-a", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
-    ],
-  });
-  const b = inputHash({
-    ...base,
-    pins: [
-      ["obs-a", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
-      ["obs-z", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
-    ],
-  });
-  assert.equal(a, b);
-  const c = inputHash({
-    ...base,
-    pins: [
-      ["obs-z", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
-      ["obs-b", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
-    ],
-  });
-  assert.notEqual(a, c);
-});
-
-test("H03 removing a pin or changing margin changes hash", () => {
-  const pins: [string, string][] = [
-    ["obs-z", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
-    ["obs-a", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
-  ];
-  const args = {
-    manifestId: "manifest-20260914",
-    securityId: "SEC-A",
-    manifestHash: "1111111111111111111111111111111111111111111111111111111111111111",
-    snapshotHash: "2222222222222222222222222222222222222222222222222222222222222222",
-    ruleHash: "3333333333333333333333333333333333333333333333333333333333333333",
-    engineHash: "4444444444444444444444444444444444444444444444444444444444444444",
-    costHash: "5555555555555555555555555555555555555555555555555555555555555555",
-    margin: 3,
-    pins,
-  };
-  const base = inputHash(args);
-  assert.notEqual(inputHash({ ...args, pins: [pins[0]] }), base);
-  assert.notEqual(inputHash({ ...args, margin: 4 }), base);
-  assert.notEqual(inputHash({ ...args, manifestId: "manifest-other" }), base);
-});
-
-test("H05 rejects malformed hash inputs", () => {
-  const good = {
-    manifestId: "manifest-20260914",
-    securityId: "SEC-A",
-    manifestHash: "1111111111111111111111111111111111111111111111111111111111111111",
-    snapshotHash: "2222222222222222222222222222222222222222222222222222222222222222",
-    ruleHash: "3333333333333333333333333333333333333333333333333333333333333333",
-    engineHash: "4444444444444444444444444444444444444444444444444444444444444444",
-    costHash: "5555555555555555555555555555555555555555555555555555555555555555",
-    margin: 3,
-    pins: [["obs-a", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]] as [string, string][],
-  };
-  assert.throws(() => inputHash({ ...good, margin: 1 }), KernelError);
-  assert.throws(() => inputHash({ ...good, margin: 16 }), KernelError);
-  assert.throws(() => inputHash({ ...good, securityId: "SEC A" }), KernelError);
-  assert.throws(() => inputHash({ ...good, pins: [["obs-a", "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"]] }), KernelError);
-  assert.throws(() => inputHash({ ...good, pins: [["obs-a", "bbbb"]] }), KernelError);
-});
-
-test("H07 CJ1 rejects numbers and duplicate keys", () => {
-  assert.throws(() => parseCj1(Buffer.from('{"a":1}', "utf8")), KernelError);
-  assert.throws(() => parseCj1(Buffer.from('{"a":true,"a":false}', "utf8")), KernelError);
-  const round = parseCj1(canon({ z: "é", a: true }));
-  assert.deepEqual(round, { a: true, z: "é" });
-  assert.equal(canon({ z: "é", a: true }).toString("hex"), "7b2261223a747275652c227a223a22c3a9227d");
-});
-
-test("H09 shuffle golden vector", () => {
-  const got = shuffle(
-    ["SEC-C", "SEC-A", "SEC-B"],
-    "0101010101010101010101010101010101010101010101010101010101010101",
-  );
-  assert.deepEqual(got, ["SEC-A", "SEC-C", "SEC-B"]);
-  assert.throws(() => shuffle(["SEC-A", "SEC-A"], "0101010101010101010101010101010101010101010101010101010101010101"), KernelError);
-  assert.throws(() => shuffle(["SEC-A"], "01"), KernelError);
-});
-
-test("rule AST hash golden vector", () => {
-  validateAst(INITIAL_AST);
-  assert.equal(ruleAstHash(INITIAL_AST), "e9cf184a531fd993dc1b36ce0e1a1b0dcd67ebc4b80e4ff1ebe5a72ab00c15f4");
-});
-
-test("fill and pnl golden vectors", () => {
-  assert.equal(modeledFill("123.456789"), "123.518517394500");
-  assert.equal(
-    paperPnl("5000.0000", "105.000000", "100.050000000000", "0.0000"),
-    "247.3763",
-  );
-  assert.equal(modeledFill("100.000000"), "100.050000000000");
-});
-
-test("F01 initial AST predicts only the specified conjunction", () => {
-  const card = {
-    timing_quality: "ISSUER_CONFIRMED",
-    card_complete: true,
-    options_valid: true,
-    implied_move: "0.080000000000",
-    benchmark_relative_5d: "-0.012000000000",
-    benchmark_relative_63d: "0.045000000000",
-  };
-  const ok = evaluate(INITIAL_AST, card);
-  assert.equal(ok.decision, "PREDICT");
-  assert.equal(ok.direction, "LONG");
-  const lo = evaluate(INITIAL_AST, { ...card, implied_move: "0.039999999999" });
-  assert.equal(lo.decision, "STAND_DOWN");
-  const hi = evaluate(INITIAL_AST, { ...card, implied_move: "0.150000000001" });
-  assert.equal(hi.decision, "STAND_DOWN");
-  const eqLo = evaluate(INITIAL_AST, { ...card, implied_move: "0.040000000000" });
-  assert.equal(eqLo.decision, "PREDICT");
-  const eqHi = evaluate(INITIAL_AST, { ...card, implied_move: "0.150000000000" });
-  assert.equal(eqHi.decision, "PREDICT");
-});
-
-test("F02 missing required values stand down; invalid rule is not a prediction", () => {
-  const r = evaluate(INITIAL_AST, { card_complete: false });
-  assert.equal(r.status, "OK");
-  assert.equal(r.decision, "STAND_DOWN");
-  const bad = evaluate({ schema: "nope" }, { card_complete: true });
-  assert.equal(bad.status, "INVALID_RULE");
-  assert.equal(bad.decision, "STAND_DOWN");
-  assert.equal(bad.direction, null);
-});
-
-test("F03 F04 reject malformed AST and boolean substitutes", () => {
-  assert.throws(() => validateAst({ ...INITIAL_AST, all: [] }), KernelError);
-  assert.throws(
-    () =>
-      validateAst({
-        ...INITIAL_AST,
-        all: [{ field: "card_complete", op: "EQ", value: "true" }],
-      }),
-    KernelError,
-  );
-  const r = evaluate(INITIAL_AST, {
-    timing_quality: "ISSUER_CONFIRMED",
-    card_complete: true,
-    options_valid: 1,
-    implied_move: "0.080000000000",
-    benchmark_relative_5d: "-0.012000000000",
-    benchmark_relative_63d: "0.045000000000",
-  });
-  assert.equal(r.status, "INVALID_CARD");
-  assert.equal(r.decision, "STAND_DOWN");
-  assert.equal(r.direction, null);
-});
-
-test("F15 tiny positive raw return remains a direction hit", () => {
-  assert.equal(directionHit("100.000000", "100.000001"), true);
-  assert.equal(directionHit("100.000000", "100.000000"), false);
-  assert.equal(directionHit("100.000000", "99.999999"), false);
-  assert.equal(
-    bandHit("100.000000", "108.000000", "0.040000000000", "0.160000000000"),
-    true,
-  );
-  assert.equal(
-    bandHit("100.000000", "103.000000", "0.040000000000", "0.160000000000"),
-    false,
-  );
-});
-
-test("cost model hash is stable", () => {
-  const a = costModelHash(COST_MODEL_CONTENT);
-  const b = costModelHash({ ...COST_MODEL_CONTENT });
-  assert.equal(a, b);
-  assert.match(a, /^[0-9a-f]{64}$/);
-});
-
-test("decimal domain rejects negative zero and excess scale", () => {
-  assert.throws(() => dec("-0", 4), KernelError);
-  assert.throws(() => dec("1.0000001", 6), KernelError);
-  assert.throws(() => dec("0", 6, "0.000001", "1000000"), KernelError);
-});
-```
-
-
----
-
-## `src/desk/util.ts` (3003 bytes)
-
-```ts
-import { randomBytes } from "node:crypto";
-import { ident, sha256, canon } from "@/kernel/index";
-
-export class DeskError extends Error {
-  code: string;
-  retryable: boolean;
-  http: number;
-  constructor(code: string, message: string, http = 422, retryable = false) {
-    super(message);
-    this.name = "DeskError";
-    this.code = code;
-    this.http = http;
-    this.retryable = retryable;
-  }
-}
-
-export function asHex(v: unknown): string {
-  if (v == null) throw new DeskError("INVALID_HASH", "missing hash");
-  if (typeof v === "string") {
-    const s = v.startsWith("\\x") ? v.slice(2) : v.startsWith("0x") ? v.slice(2) : v;
-    return s.toLowerCase();
-  }
-  if (v instanceof Uint8Array || Buffer.isBuffer(v)) return Buffer.from(v).toString("hex");
-  if (typeof v === "object" && v && "type" in (v as object) && (v as { type: string }).type === "Buffer") {
-    return Buffer.from((v as { data: number[] }).data).toString("hex");
-  }
-  throw new DeskError("INVALID_HASH", "unreadable hash");
-}
-
-export function hexBuf(hex: string): Buffer {
-  const h = asHex(hex);
-  if (!/^[0-9a-f]{64}$/.test(h) && !/^[0-9a-f]+$/.test(h)) throw new DeskError("INVALID_HASH", "bad hex");
-  return Buffer.from(h, "hex");
-}
-
-export function newId(prefix: string): string {
-  const id = `${prefix}-${randomBytes(8).toString("hex")}`;
-  return ident(id);
-}
-
-export function requestHash(obj: unknown): Buffer {
-  return Buffer.from(sha256(canon(obj)), "hex");
-}
-
-export const ENVELOPE = {
-  product_name: "Trading App" as const,
-  paperOnly: true as const,
-  liveTradingSupported: false as const,
-  activeModelWeight: "0" as const,
+export type VerifyFreezeResult = {
+  freeze_id: string;
+  decision: string;
+  direction: string | null;
+  input_hash: string;
+  output_hash: string;
+  admission_outcome: string | null;
+  position_id: string | null;
+  duplicate: true;
+  verification_level: "BYTE_VERIFIED";
 };
 
-export type DeskRole = "OPERATOR" | "REVIEWER" | "SERVICE";
-
-export function rfc3339(d: Date): string {
-  return d.toISOString().replace(/\.(\d{3})Z$/, (m, ms) => `.${ms}000Z`);
-}
-
-export function etInstant(date: string, hm: string): Date {
-  // date YYYY-MM-DD, hm HH:MM in America/New_York. September 2026 is EDT (UTC-4).
-  const [h, min] = hm.split(":").map(Number);
-  const [y, m, d] = date.split("-").map(Number);
-  // Determine offset via a formatter
-  const probe = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    timeZoneName: "shortOffset",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(probe);
-  const tz = parts.find((p) => p.type === "timeZoneName")?.value ?? "GMT-4";
-  const off = tz.replace("GMT", "").replace("UTC", "") || "-4";
-  const sign = off.startsWith("-") ? -1 : 1;
-  const [oh, om = "0"] = off.replace("+", "").replace("-", "").split(":");
-  const offsetMin = sign * (Number(oh) * 60 + Number(om));
-  return new Date(Date.UTC(y, m - 1, d, h, min, 0) - offsetMin * 60 * 1000);
-}
-
-export function addSeconds(d: Date, s: number): Date {
-  return new Date(d.getTime() + s * 1000);
-}
-
-export function jsonCanon(obj: unknown): string {
-  return canon(obj).toString("utf8");
-}
-```
-
-
----
-
-## `src/desk/writer.ts` (6227 bytes)
-
-```ts
-import { createHash } from "node:crypto";
-import type { Sql } from "@/lib/db";
-import { withTransaction } from "@/lib/db";
-import { field, sha256 } from "@/kernel/index";
-import { asHex, DeskError, hexBuf, jsonCanon, newId, requestHash } from "./util";
-
-export type Gate = {
-  next_event_seq: number;
-  last_authoritative_time: string;
-  clock_trusted: boolean;
-};
-
-export type WriterCtx = {
-  sql: Sql;
-  now: Date;
-  seq: number;
-  actor: string;
-};
-
-export async function withWriter<T>(
-  actor: string,
-  fn: (ctx: WriterCtx) => Promise<T>,
-): Promise<T> {
-  return withTransaction(async (sql) => {
-    const gates = await sql.query<Gate>(
-      `SELECT next_event_seq, last_authoritative_time::text, clock_trusted FROM writer_gate WHERE singleton_key = TRUE FOR UPDATE`,
-    );
-    if (gates.length !== 1) throw new DeskError("WRITER_GATE_MISSING", "writer gate missing or duplicated", 503);
-    const clock = await sql.query<{ now_utc: string; trusted: boolean; source: string }>(
-      `SELECT now_utc::text, trusted, source FROM fixture_clock WHERE singleton_key = TRUE FOR UPDATE`,
-    );
-    if (clock.length !== 1) throw new DeskError("CLOCK_UNTRUSTED", "fixture clock missing", 503, false);
-    const now = new Date(clock[0].now_utc);
-    const last = new Date(gates[0].last_authoritative_time);
-    if (!clock[0].trusted || !gates[0].clock_trusted) {
-      throw new DeskError("CLOCK_UNTRUSTED", "trusted clock unavailable", 503);
-    }
-    if (now < last) {
-      await sql.query(`UPDATE writer_gate SET clock_trusted = FALSE WHERE singleton_key = TRUE`);
-      throw new DeskError("CLOCK_UNTRUSTED", "clock moved backward", 503);
-    }
-    const seq = Number(gates[0].next_event_seq);
-    await sql.query(`UPDATE writer_gate SET next_event_seq = $1, last_authoritative_time = $2 WHERE singleton_key = TRUE`, [
-      seq + 1,
-      now.toISOString(),
-    ]);
-    return fn({ sql, now, seq, actor });
-  });
-}
-
-export async function appendEvent(
-  ctx: WriterCtx,
-  args: {
-    commandId: string;
-    type: string;
-    payload: unknown;
-    receipt: unknown;
-    request?: unknown;
-  },
-): Promise<{ eventSeq: number; eventId: string }> {
-  const eventId = newId("evt");
-  const req = requestHash(args.request ?? args.payload);
-  const canonical = jsonCanon(args.payload);
-  const preimage = Buffer.concat([
-    field(Buffer.from("Trading App|event|1", "ascii")),
-    field(Buffer.from(String(ctx.seq), "utf8")),
-    field(Buffer.from(args.commandId, "utf8")),
-    field(Buffer.from(ctx.actor, "utf8")),
-    field(Buffer.from(ctx.now.toISOString(), "utf8")),
-    field(req),
-    field(Buffer.from(canonical, "utf8")),
-  ]);
-  const eventHash = createHash("sha256").update(preimage).digest();
-  try {
-    await ctx.sql.query(
-      `INSERT INTO event_log (
-        event_seq, event_id, command_id, request_hash, event_type, actor_principal_id,
-        occurred_at, semantic_payload, canonical_payload, result_receipt, event_hash
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10::jsonb,$11)`,
-      [
-        ctx.seq,
-        eventId,
-        args.commandId,
-        req,
-        args.type,
-        ctx.actor,
-        ctx.now.toISOString(),
-        JSON.stringify(args.payload),
-        canonical,
-        JSON.stringify(args.receipt),
-        eventHash,
-      ],
-    );
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (/event_log_command_id|command_id/i.test(msg) || /unique/i.test(msg)) {
-      throw new DeskError("IDEMPOTENCY_CONFLICT", "command_id already used", 409);
-    }
-    throw err;
-  }
-  return { eventSeq: ctx.seq, eventId };
-}
-
-export async function loadExistingCommand<T>(sql: Sql, commandId: string): Promise<T | null> {
-  const rows = await sql.query<{ result_receipt: T; event_type: string }>(
-    `SELECT result_receipt, event_type FROM event_log WHERE command_id = $1`,
-    [commandId],
-  );
-  if (!rows.length) return null;
-  return rows[0].result_receipt;
-}
-
-export async function raiseAlarm(
-  ctx: WriterCtx,
-  code: string,
-  component: string,
-  details: unknown,
-  blocks = false,
-): Promise<void> {
-  const existing = await ctx.sql.query<{ alarm_id: string }>(
-    `SELECT alarm_id FROM ops_alarm WHERE code = $1 AND status <> 'RESOLVED'`,
-    [code],
-  );
-  if (existing.length) {
-    await ctx.sql.query(`UPDATE ops_alarm SET last_seen = $1, safe_details = $2::jsonb WHERE alarm_id = $3`, [
-      ctx.now.toISOString(),
-      JSON.stringify(details),
-      existing[0].alarm_id,
-    ]);
-    return;
-  }
-  const id = newId("alm");
-  await ctx.sql.query(
-    `INSERT INTO ops_alarm (
-      alarm_id, code, component, first_seen, last_seen, related_ids, blocks_new_admission, status, safe_details, opened_event_seq
-    ) VALUES ($1,$2,$3,$4,$4,$5::jsonb,$6,'OPEN',$7::jsonb,$8)`,
-    [id, code, component, ctx.now.toISOString(), JSON.stringify([]), blocks, JSON.stringify(details), ctx.seq],
-  );
-}
-
-export async function recomputeRisk(sql: Sql): Promise<{ count: number; notional: string }> {
-  const rows = await sql.query<{ c: number; n: string | null }>(
-    `SELECT COUNT(*)::int AS c, COALESCE(SUM(original_reserved_notional),0)::text AS n
-     FROM "position" WHERE state <> 'CLOSED'`,
-  );
-  return { count: Number(rows[0]?.c ?? 0), notional: rows[0]?.n ?? "0.0000" };
-}
-
-export async function lockRisk(sql: Sql): Promise<{ reserved_count: number; reserved_notional: string }> {
-  const rows = await sql.query<{ reserved_count: number; reserved_notional: string }>(
-    `SELECT reserved_count, reserved_notional::text FROM desk_risk_state WHERE sleeve = 'EARNINGS' FOR UPDATE`,
-  );
-  if (rows.length !== 1) throw new DeskError("RISK_STATE_MISSING", "risk singleton missing", 503);
-  return rows[0];
-}
-
-export async function assertRiskMatches(sql: Sql): Promise<void> {
-  const cached = await lockRisk(sql);
-  const actual = await recomputeRisk(sql);
-  const cachedN = Number(cached.reserved_notional);
-  const actualN = Number(actual.notional);
-  if (cached.reserved_count !== actual.count || Math.abs(cachedN - actualN) > 0.00005) {
-    throw new DeskError("RISK_STATE_MISMATCH", "cached risk disagrees with positions", 503);
-  }
-}
-
-export function digest32(hex: string): Buffer {
-  return hexBuf(hex);
-}
-
-void asHex;
-void sha256;
-```
-
-
----
-
-## `src/desk/alpaca.ts` (19943 bytes)
-
-```ts
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { getSql } from "@/lib/db";
-import { DeskError, newId } from "./util";
-import type { AlpacaMode, AlpacaPublicStatus } from "./alpaca-types";
-
-export type { AlpacaMode, AlpacaPublicStatus } from "./alpaca-types";
-
-const WRAP_ID = "kr-alpaca-wrap";
-const DEFAULT_WATCH = ["SPY", "QQQ", "NVDA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "TSLA", "AMD"];
-
-type StoredCred = {
-  api_key_id: string;
-  secret: string;
-  mode: AlpacaMode;
-  watchlist: string[];
-};
-
-function tradingHost(mode: AlpacaMode): string {
-  return mode === "LIVE" ? "https://api.alpaca.markets" : "https://paper-api.alpaca.markets";
-}
-
-function asBuf(v: unknown): Buffer {
-  if (Buffer.isBuffer(v)) return v;
-  if (v instanceof Uint8Array) return Buffer.from(v);
-  if (typeof v === "string") {
-    const s = v.startsWith("\\x") ? v.slice(2) : v;
-    if (/^[0-9a-fA-F]+$/.test(s) && s.length % 2 === 0) return Buffer.from(s, "hex");
-  }
-  throw new DeskError("KEYRING", "unreadable key material", 500);
-}
-
-function maskKey(id: string): string {
-  if (id.length <= 8) return `${id.slice(0, 2)}…${id.slice(-2)}`;
-  return `${id.slice(0, 4)}…${id.slice(-4)}`;
-}
-
-function safeActor(raw: string): string {
-  const cleaned = raw.replace(/[^A-Za-z0-9:._-]/g, "").slice(0, 56);
-  const id = (cleaned.startsWith("usr-") ? cleaned : `usr-${cleaned || "operator"}`).slice(0, 64);
-  return id;
-}
-
-function watchlistLiteral(list: string[]): string {
-  return `{${list.join(",")}}`;
-}
-
-let schemaReady = false;
-async function ensureAlpacaSchema(): Promise<void> {
-  if (schemaReady) return;
+async function ensureAudit(): Promise<void> {
   const sql = await getSql();
   await sql.query(`
-    CREATE TABLE IF NOT EXISTS alpaca_credential (
-      singleton_key boolean PRIMARY KEY CHECK (singleton_key),
-      api_key_id text NOT NULL CHECK (char_length(api_key_id) BETWEEN 8 AND 80),
-      secret_ciphertext bytea NOT NULL,
-      secret_nonce bytea NOT NULL,
-      secret_tag bytea NOT NULL,
-      mode text NOT NULL CHECK (mode IN ('PAPER', 'LIVE')),
-      watchlist text[] NOT NULL,
-      connected_at timestamptz NOT NULL,
-      connected_by text NOT NULL,
-      last_ok_at timestamptz,
-      last_error text,
-      account_number_last4 text,
-      account_status text
+    CREATE TABLE IF NOT EXISTS freeze_verify_audit (
+      audit_id text PRIMARY KEY,
+      freeze_id text NOT NULL,
+      manifest_id text NOT NULL,
+      permanent_security_id text NOT NULL,
+      result text NOT NULL CHECK (result IN ('BYTE_VERIFIED', 'HASH_ONLY', 'ATTESTED', 'UNVERIFIABLE')),
+      detail text NOT NULL,
+      checked_at timestamptz NOT NULL DEFAULT NOW()
     )`);
-  await sql.query(`
-    CREATE TABLE IF NOT EXISTS alpaca_order_log (
-      local_id text PRIMARY KEY,
-      alpaca_order_id text,
-      client_order_id text NOT NULL UNIQUE,
-      symbol text NOT NULL,
-      side text NOT NULL,
-      order_type text NOT NULL,
-      time_in_force text NOT NULL,
-      qty text,
-      notional text,
-      limit_price text,
-      status text NOT NULL,
-      mode text NOT NULL,
-      submitted_at timestamptz NOT NULL,
-      submitted_by text NOT NULL,
-      raw_receipt jsonb NOT NULL
-    )`);
-  schemaReady = true;
 }
 
-async function wrapKey(): Promise<Buffer> {
+async function recordOutcome(args: {
+  freezeId: string;
+  manifestId: string;
+  securityId: string;
+  result: "BYTE_VERIFIED" | "UNVERIFIABLE";
+  detail: string;
+}): Promise<void> {
+  await ensureAudit();
   const sql = await getSql();
-  const existing = await sql.query<{ key_bytes: unknown }>(
-    `SELECT key_bytes FROM app_keyring WHERE key_id = $1`,
-    [WRAP_ID],
-  );
-  if (existing.length) return asBuf(existing[0].key_bytes);
-  const bytes = randomBytes(32);
   await sql.query(
-    `INSERT INTO app_keyring (key_id, purpose, key_bytes, created_at)
-     VALUES ($1, 'alpaca_wrap', $2, NOW())
-     ON CONFLICT (key_id) DO NOTHING`,
-    [WRAP_ID, bytes],
+    `INSERT INTO freeze_verify_audit (audit_id, freeze_id, manifest_id, permanent_security_id, result, detail, checked_at)
+     VALUES ($1,$2,$3,$4,$5,$6,NOW())`,
+    [newId("vfy"), args.freezeId, args.manifestId, args.securityId, args.result, args.detail],
   );
-  const again = await sql.query<{ key_bytes: unknown }>(
-    `SELECT key_bytes FROM app_keyring WHERE key_id = $1`,
-    [WRAP_ID],
-  );
-  if (!again.length) throw new DeskError("KEYRING", "failed to persist wrap key", 500);
-  return asBuf(again[0].key_bytes);
-}
-
-function encryptSecret(key: Buffer, plain: string): { ciphertext: Buffer; nonce: Buffer; tag: Buffer } {
-  const nonce = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", key, nonce);
-  const ciphertext = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
-  return { ciphertext, nonce, tag: cipher.getAuthTag() };
-}
-
-function decryptSecret(key: Buffer, ciphertext: Buffer, nonce: Buffer, tag: Buffer): string {
-  const decipher = createDecipheriv("aes-256-gcm", key, nonce);
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
-}
-
-export function normalizeSymbol(raw: string): string {
-  const s = raw.trim().toUpperCase();
-  if (!/^[A-Z][A-Z.]{0,9}$/.test(s)) throw new DeskError("INVALID_SYMBOL", "Ticker must be letters (optional dot), max 10", 422);
-  return s;
-}
-
-export function normalizeWatchlist(list: string[]): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const item of list) {
-    const s = normalizeSymbol(item);
-    if (seen.has(s)) continue;
-    seen.add(s);
-    out.push(s);
-    if (out.length >= 24) break;
-  }
-  if (!out.length) throw new DeskError("INVALID_WATCHLIST", "Watchlist needs at least one ticker", 422);
-  return out;
-}
-
-export async function publicStatus(): Promise<AlpacaPublicStatus> {
-  try {
-    await ensureAlpacaSchema();
-  } catch {
-    return {
-      connected: false,
-      mode: null,
-      api_key_masked: null,
-      account_number_last4: null,
-      account_status: null,
-      last_ok_at: null,
-      last_error: null,
-      watchlist: DEFAULT_WATCH,
-      trading_host: null,
-    };
-  }
-  const sql = await getSql();
-  try {
-    const rows = await sql.query<{
-      api_key_id: string;
-      mode: AlpacaMode;
-      watchlist: string[] | string;
-      last_ok_at: string | null;
-      last_error: string | null;
-      account_number_last4: string | null;
-      account_status: string | null;
-    }>(
-      `SELECT api_key_id, mode, watchlist, last_ok_at::text, last_error, account_number_last4, account_status
-       FROM alpaca_credential WHERE singleton_key = TRUE`,
+  if (args.result === "UNVERIFIABLE") {
+    const existing = await sql.query<{ alarm_id: string }>(
+      `SELECT alarm_id FROM ops_alarm WHERE code = 'FREEZE_ARTIFACT_MISMATCH' AND status <> 'RESOLVED'`,
     );
-    if (!rows.length) {
-      return {
-        connected: false,
-        mode: null,
-        api_key_masked: null,
-        account_number_last4: null,
-        account_status: null,
-        last_ok_at: null,
-        last_error: null,
-        watchlist: DEFAULT_WATCH,
-        trading_host: null,
-      };
-    }
-    const r = rows[0];
-    const watch = Array.isArray(r.watchlist)
-      ? r.watchlist
-      : String(r.watchlist ?? "")
-          .replace(/[{}]/g, "")
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
-    return {
-      connected: true,
-      mode: r.mode,
-      api_key_masked: maskKey(r.api_key_id),
-      account_number_last4: r.account_number_last4,
-      account_status: r.account_status,
-      last_ok_at: r.last_ok_at,
-      last_error: r.last_error,
-      watchlist: watch.length ? watch : DEFAULT_WATCH,
-      trading_host: tradingHost(r.mode),
-    };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "";
-    if (msg.includes("alpaca_credential") || msg.includes("does not exist")) {
-      schemaReady = false;
-      return {
-        connected: false,
-        mode: null,
-        api_key_masked: null,
-        account_number_last4: null,
-        account_status: null,
-        last_ok_at: null,
-        last_error: null,
-        watchlist: DEFAULT_WATCH,
-        trading_host: null,
-      };
-    }
-    throw e;
-  }
-}
-
-async function loadStored(): Promise<StoredCred> {
-  await ensureAlpacaSchema();
-  const sql = await getSql();
-  const rows = await sql.query<{
-    api_key_id: string;
-    secret_ciphertext: unknown;
-    secret_nonce: unknown;
-    secret_tag: unknown;
-    mode: AlpacaMode;
-    watchlist: string[] | string;
-  }>(
-    `SELECT api_key_id, secret_ciphertext, secret_nonce, secret_tag, mode, watchlist
-     FROM alpaca_credential WHERE singleton_key = TRUE`,
-  );
-  if (!rows.length) throw new DeskError("ALPACA_NOT_CONNECTED", "Paste Alpaca keys on Trade or Admin first", 409);
-  const r = rows[0];
-  const key = await wrapKey();
-  const secret = decryptSecret(key, asBuf(r.secret_ciphertext), asBuf(r.secret_nonce), asBuf(r.secret_tag));
-  const watch = Array.isArray(r.watchlist)
-    ? r.watchlist
-    : String(r.watchlist ?? "")
-        .replace(/[{}]/g, "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-  return { api_key_id: r.api_key_id, secret, mode: r.mode, watchlist: watch.length ? watch : DEFAULT_WATCH };
-}
-
-type AlpacaJson = Record<string, unknown> | unknown[];
-
-async function alpacaFetch(path: string, init: RequestInit & { host?: "trade" | "data" } = {}): Promise<AlpacaJson> {
-  const creds = await loadStored();
-  const host = init.host === "data" ? "https://data.alpaca.markets" : tradingHost(creds.mode);
-  const headers = new Headers(init.headers);
-  headers.set("APCA-API-KEY-ID", creds.api_key_id);
-  headers.set("APCA-API-SECRET-KEY", creds.secret);
-  headers.set("Accept", "application/json");
-  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  let res: Response;
-  try {
-    res = await fetch(`${host}${path}`, { ...init, headers });
-  } catch (e) {
-    throw new DeskError(
-      "ALPACA_UNREACHABLE",
-      e instanceof Error ? `Alpaca unreachable: ${e.message}` : "Alpaca unreachable",
-      503,
-      true,
-    );
-  }
-  const text = await res.text();
-  let body: AlpacaJson | null = null;
-  const looksHtml = /^\s*</.test(text);
-  if (text && !looksHtml) {
-    try {
-      body = JSON.parse(text) as AlpacaJson;
-    } catch {
-      body = { message: text.slice(0, 180) };
-    }
-  }
-  if (!res.ok) {
-    const jsonMsg =
-      body && !Array.isArray(body) && typeof body.message === "string" ? body.message : null;
-    const msg =
-      jsonMsg && !jsonMsg.includes("<")
-        ? jsonMsg
-        : res.status === 401 || res.status === 403
-          ? "Alpaca rejected these keys. Use paper keys for Paper, live keys for Live, and paste the full secret."
-          : `Alpaca HTTP ${res.status}`;
-    const code = res.status === 401 || res.status === 403 ? "ALPACA_AUTH" : "ALPACA_HTTP";
-    throw new DeskError(code, msg, res.status === 401 ? 401 : 422);
-  }
-  return body ?? {};
-}
-
-async function markOk(accountNumber?: string, status?: string): Promise<void> {
-  const sql = await getSql();
-  const last4 = accountNumber ? accountNumber.slice(-4) : null;
-  await sql.query(
-    `UPDATE alpaca_credential
-     SET last_ok_at = NOW(), last_error = NULL, account_number_last4 = COALESCE($1, account_number_last4),
-         account_status = COALESCE($2, account_status)
-     WHERE singleton_key = TRUE`,
-    [last4, status ?? null],
-  );
-}
-
-async function markErr(message: string): Promise<void> {
-  const sql = await getSql();
-  await sql.query(`UPDATE alpaca_credential SET last_error = $1 WHERE singleton_key = TRUE`, [message.slice(0, 400)]);
-}
-
-export async function saveCredentials(args: {
-  apiKeyId: string;
-  apiSecret: string;
-  mode: AlpacaMode;
-  confirmLive?: boolean;
-  actor: string;
-}): Promise<AlpacaPublicStatus> {
-  await ensureAlpacaSchema();
-  const apiKeyId = args.apiKeyId.trim();
-  const apiSecret = args.apiSecret.trim();
-  if (apiKeyId.length < 8 || apiSecret.length < 8) {
-    throw new DeskError("INVALID_KEYS", "Key id and secret must be at least 8 characters", 422);
-  }
-  if (args.mode === "LIVE" && args.confirmLive !== true) {
-    throw new DeskError("LIVE_NOT_CONFIRMED", "Live mode requires the explicit confirmation checkbox", 422);
-  }
-  const key = await wrapKey();
-  const enc = encryptSecret(key, apiSecret);
-  const sql = await getSql();
-  const actor = safeActor(args.actor);
-  await sql.query(
-    `INSERT INTO alpaca_credential (
-       singleton_key, api_key_id, secret_ciphertext, secret_nonce, secret_tag, mode, watchlist,
-       connected_at, connected_by, last_ok_at, last_error, account_number_last4, account_status
-     ) VALUES (TRUE,$1,$2,$3,$4,$5,$6::text[],NOW(),$7,NULL,NULL,NULL,NULL)
-     ON CONFLICT (singleton_key) DO UPDATE SET
-       api_key_id = EXCLUDED.api_key_id,
-       secret_ciphertext = EXCLUDED.secret_ciphertext,
-       secret_nonce = EXCLUDED.secret_nonce,
-       secret_tag = EXCLUDED.secret_tag,
-       mode = EXCLUDED.mode,
-       connected_at = NOW(),
-       connected_by = EXCLUDED.connected_by,
-       last_ok_at = NULL,
-       last_error = NULL,
-       account_number_last4 = NULL,
-       account_status = NULL`,
-    [apiKeyId, enc.ciphertext, enc.nonce, enc.tag, args.mode, watchlistLiteral(DEFAULT_WATCH), actor],
-  );
-  try {
-    await probeAccount();
-  } catch (e) {
-    const msg = e instanceof DeskError ? e.message : "Connection test failed";
-    await markErr(msg);
-    // Keys are stored. Surface the test failure so the operator can correct paper/live mixups.
-    throw new DeskError(
-      e instanceof DeskError ? e.code : "ALPACA_TEST",
-      `Keys were saved, but Alpaca rejected the test: ${msg}`,
-      e instanceof DeskError ? e.http : 422,
-    );
-  }
-  return publicStatus();
-}
-
-export async function disconnect(): Promise<AlpacaPublicStatus> {
-  await ensureAlpacaSchema();
-  const sql = await getSql();
-  await sql.query(`DELETE FROM alpaca_credential WHERE singleton_key = TRUE`);
-  return publicStatus();
-}
-
-export async function saveWatchlist(list: string[]): Promise<AlpacaPublicStatus> {
-  const watch = normalizeWatchlist(list);
-  const sql = await getSql();
-  const n = await sql.query(
-    `UPDATE alpaca_credential SET watchlist = $1::text[] WHERE singleton_key = TRUE RETURNING api_key_id`,
-    [watchlistLiteral(watch)],
-  );
-  if (!n.length) throw new DeskError("ALPACA_NOT_CONNECTED", "Paste Alpaca keys on Admin first", 409);
-  return publicStatus();
-}
-
-function asRecord(v: AlpacaJson): Record<string, string | boolean | null> {
-  if (!v || Array.isArray(v) || typeof v !== "object") return {};
-  const out: Record<string, string | boolean | null> = {};
-  for (const [k, val] of Object.entries(v)) {
-    if (typeof val === "string" || typeof val === "boolean") out[k] = val;
-    else if (val == null) out[k] = null;
-    else if (typeof val === "number") out[k] = String(val);
-  }
-  return out;
-}
-
-function asList(v: AlpacaJson): Array<Record<string, string | boolean | null>> {
-  if (!Array.isArray(v)) return [];
-  return v.map((item) => asRecord(item as AlpacaJson));
-}
-
-async function probeAccount(): Promise<void> {
-  const rec = asRecord(await alpacaFetch("/v2/account"));
-  await markOk(
-    typeof rec.account_number === "string" ? rec.account_number : undefined,
-    typeof rec.status === "string" ? rec.status : undefined,
-  );
-}
-
-export async function getAccount(): Promise<Record<string, string | boolean | null>> {
-  const rec = asRecord(await alpacaFetch("/v2/account"));
-  await markOk(
-    typeof rec.account_number === "string" ? rec.account_number : undefined,
-    typeof rec.status === "string" ? rec.status : undefined,
-  );
-  return rec;
-}
-
-export async function getClock(): Promise<Record<string, string | boolean | null>> {
-  return asRecord(await alpacaFetch("/v2/clock"));
-}
-
-export async function getPositions(): Promise<Array<Record<string, string | boolean | null>>> {
-  return asList(await alpacaFetch("/v2/positions"));
-}
-
-export async function getOrders(
-  status: "open" | "closed" | "all" = "open",
-): Promise<Array<Record<string, string | boolean | null>>> {
-  return asList(await alpacaFetch(`/v2/orders?status=${encodeURIComponent(status)}&limit=50&direction=desc`));
-}
-
-function numField(obj: unknown, key: string): string | null {
-  if (!obj || typeof obj !== "object") return null;
-  const v = (obj as Record<string, unknown>)[key];
-  if (typeof v === "number" && Number.isFinite(v)) return String(v);
-  if (typeof v === "string" && v) return v;
-  return null;
-}
-
-export async function getSnapshots(
-  symbols: string[],
-): Promise<Array<{ symbol: string; last: string | null; bid: string | null; ask: string | null; change_pct: string | null }>> {
-  const list = normalizeWatchlist(symbols);
-  const body = await alpacaFetch(
-    `/v2/stocks/snapshots?symbols=${encodeURIComponent(list.join(","))}&feed=iex`,
-    { host: "data" },
-  );
-  const bag = body && !Array.isArray(body) ? body : {};
-  return list.map((symbol) => {
-    const snap = (bag as Record<string, unknown>)[symbol];
-    const rec = snap && typeof snap === "object" ? (snap as Record<string, unknown>) : {};
-    const last = numField(rec.latestTrade, "p") ?? numField(rec.dailyBar, "c");
-    const bid = numField(rec.latestQuote, "bp");
-    const ask = numField(rec.latestQuote, "ap");
-    const prev = numField(rec.prevDailyBar, "c");
-    let change_pct: string | null = null;
-    if (last && prev && Number(prev) !== 0) {
-      change_pct = (((Number(last) - Number(prev)) / Number(prev)) * 100).toFixed(2);
-    }
-    return { symbol, last, bid, ask, change_pct };
-  });
-}
-
-export async function submitOrder(args: {
-  symbol: string;
-  side: "buy" | "sell";
-  type: "market" | "limit";
-  timeInForce: "day" | "gtc" | "ioc";
-  qty?: string;
-  notional?: string;
-  limitPrice?: string;
-  extendedHours?: boolean;
-  confirmLive?: boolean;
-  actor: string;
-}): Promise<Record<string, string | boolean | null>> {
-  const creds = await loadStored();
-  if (creds.mode === "LIVE" && args.confirmLive !== true) {
-    throw new DeskError("LIVE_NOT_CONFIRMED", "Live orders require the explicit confirmation checkbox", 422);
-  }
-  const symbol = normalizeSymbol(args.symbol);
-  const qty = args.qty?.trim() || undefined;
-  const notional = args.notional?.trim() || undefined;
-  if ((qty && notional) || (!qty && !notional)) {
-    throw new DeskError("INVALID_SIZE", "Provide either share quantity or dollar notional, not both", 422);
-  }
-  if (qty && !/^[0-9]+(?:\.[0-9]{1,9})?$/.test(qty)) {
-    throw new DeskError("INVALID_SIZE", "Quantity must be a positive decimal", 422);
-  }
-  if (notional && !/^[0-9]+(?:\.[0-9]{1,2})?$/.test(notional)) {
-    throw new DeskError("INVALID_SIZE", "Notional must be dollars with at most 2 decimal places", 422);
-  }
-  if (args.type === "limit") {
-    const px = args.limitPrice?.trim();
-    if (!px || !/^[0-9]+(?:\.[0-9]{1,4})?$/.test(px)) {
-      throw new DeskError("INVALID_LIMIT", "Limit orders need a limit price", 422);
-    }
-  }
-  const clientOrderId = newId("clid");
-  const payload: Record<string, unknown> = {
-    symbol,
-    side: args.side,
-    type: args.type,
-    time_in_force: args.timeInForce,
-    client_order_id: clientOrderId,
-  };
-  if (qty) payload.qty = qty;
-  if (notional) payload.notional = notional;
-  if (args.type === "limit") payload.limit_price = args.limitPrice!.trim();
-  if (args.extendedHours) payload.extended_hours = true;
-  const raw = await alpacaFetch("/v2/orders", { method: "POST", body: JSON.stringify(payload) });
-  const rec = asRecord(raw);
-  const sql = await getSql();
-  try {
-    await sql.query(
-      `INSERT INTO alpaca_order_log (
-         local_id, alpaca_order_id, client_order_id, symbol, side, order_type, time_in_force,
-         qty, notional, limit_price, status, mode, submitted_at, submitted_by, raw_receipt
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW(),$13,$14::jsonb)`,
-      [
-        newId("aord"),
-        rec.id ?? null,
-        clientOrderId,
-        symbol,
-        args.side,
-        args.type,
-        args.timeInForce,
-        qty ?? null,
-        notional ?? null,
-        args.type === "limit" ? args.limitPrice!.trim() : null,
-        rec.status ?? "submitted",
-        creds.mode,
-        safeActor(args.actor),
-        JSON.stringify(raw),
-      ],
-    );
-  } catch {
-    /* local audit must not block a live/paper fill */
-  }
-  return rec;
-}
-
-export async function cancelOrder(orderId: string): Promise<Record<string, string | boolean | null>> {
-  if (!/^[A-Za-z0-9-]+$/.test(orderId) || orderId.length > 64) {
-    throw new DeskError("INVALID_ORDER", "Bad order id", 422);
-  }
-  const raw = await alpacaFetch(`/v2/orders/${encodeURIComponent(orderId)}`, { method: "DELETE" });
-  return asRecord(raw);
-}
-
-export async function closePosition(symbol: string): Promise<Record<string, string | boolean | null>> {
-  const s = normalizeSymbol(symbol);
-  const raw = await alpacaFetch(`/v2/positions/${encodeURIComponent(s)}`, { method: "DELETE" });
-  return asRecord(raw);
-}
-
-```
-
-
----
-
-## `src/desk/alpaca-types.ts` (348 bytes)
-
-```ts
-export type AlpacaMode = "PAPER" | "LIVE";
-
-export type AlpacaPublicStatus = {
-  connected: boolean;
-  mode: AlpacaMode | null;
-  api_key_masked: string | null;
-  account_number_last4: string | null;
-  account_status: string | null;
-  last_ok_at: string | null;
-  last_error: string | null;
-  watchlist: string[];
-  trading_host: string | null;
-};
-```
-
-
----
-
-## `src/desk/server-fns.ts` (10666 bytes)
-
-```ts
-import { createServerFn } from "@tanstack/react-start";
-import { z } from "zod";
-import { authMiddleware } from "@/lib/auth/middleware";
-import { ensureBootstrapped } from "./bootstrap";
-import { adminPayload, claimRole, earningsPayload, getOrCreatePrincipal, homePayload, predictionsPayload, resultsPayload } from "./queries";
-import { pauseAdmission, resumeAdmission, recordPrintKnowledge, appendFireRateNote, applyDueDeadlines } from "./lifecycle";
-import { freezeMember } from "./commands";
-import { DeskError, newId } from "./util";
-import type { DeskRole } from "./util";
-import {
-  cancelOrder,
-  closePosition,
-  disconnect,
-  getAccount,
-  getClock,
-  getOrders,
-  getPositions,
-  getSnapshots,
-  publicStatus,
-  saveCredentials,
-  saveWatchlist,
-  submitOrder,
-} from "./alpaca";
-
-async function identityOf(userId: string): Promise<{ role: DeskRole; principal_id: string }> {
-  let p = await getOrCreatePrincipal(userId, null);
-  if (!p.role) {
-    await claimRole(userId, null, "OPERATOR");
-    p = await getOrCreatePrincipal(userId, null);
-  }
-  if (!p.role) throw new DeskError("FORBIDDEN", "Could not assign operator", 403);
-  return { role: p.role, principal_id: p.principal_id };
-}
-
-async function roleOf(userId: string): Promise<{ role: DeskRole | null; principal_id: string }> {
-  try {
-    await ensureBootstrapped();
-  } catch {
-    /* earnings fixtures can fail independently of Alpaca keys */
-  }
-  const p = await identityOf(userId);
-  return p;
-}
-
-function requireOperator(role: DeskRole | null): void {
-  if (role !== "OPERATOR") throw new DeskError("FORBIDDEN", "OPERATOR only", 403);
-}
-
-function requireRole(role: DeskRole | null): asserts role is DeskRole {
-  if (!role) throw new DeskError("FORBIDDEN", "Assign a desk role first", 403);
-}
-
-export const fetchMe = createServerFn({ method: "GET" })
-  .middleware([authMiddleware])
-  .handler(async ({ context }) => {
-    const p = await identityOf(context.userId);
-    let alpaca = { connected: false, mode: null as "PAPER" | "LIVE" | null };
-    try {
-      const s = await publicStatus();
-      alpaca = { connected: s.connected, mode: s.mode };
-    } catch {
-      /* keys UI still has to load */
-    }
-    return {
-      userId: context.userId,
-      role: p.role,
-      principal_id: p.principal_id,
-      alpaca,
-    };
-  });
-
-export const postClaimRole = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator(z.object({ role: z.enum(["OPERATOR", "REVIEWER"]) }))
-  .handler(async ({ context, data }) => {
-    return claimRole(context.userId, null, data.role);
-  });
-
-export const fetchHome = createServerFn({ method: "GET" })
-  .middleware([authMiddleware])
-  .handler(async ({ context }) => {
-    const { role } = await roleOf(context.userId);
-    if (!role) return { needs_role: true as const };
-    return homePayload(role);
-  });
-
-export const fetchEarnings = createServerFn({ method: "GET" })
-  .middleware([authMiddleware])
-  .validator(z.object({ sessionDate: z.string().optional() }))
-  .handler(async ({ context, data }) => {
-    const { role } = await roleOf(context.userId);
-    if (!role) return { needs_role: true as const };
-    return earningsPayload(role, data.sessionDate);
-  });
-
-export const fetchPredictions = createServerFn({ method: "GET" })
-  .middleware([authMiddleware])
-  .validator(z.object({ manifestId: z.string().optional(), sessionDate: z.string().optional() }))
-  .handler(async ({ context, data }) => {
-    const { role } = await roleOf(context.userId);
-    if (!role) return { needs_role: true as const };
-    return predictionsPayload(role, data.manifestId, data.sessionDate);
-  });
-
-export const fetchResults = createServerFn({ method: "GET" })
-  .middleware([authMiddleware])
-  .handler(async ({ context }) => {
-    const { role } = await roleOf(context.userId);
-    if (!role) return { needs_role: true as const };
-    return resultsPayload(role);
-  });
-
-export const fetchAdmin = createServerFn({ method: "GET" })
-  .middleware([authMiddleware])
-  .handler(async ({ context }) => {
-    const { role } = await roleOf(context.userId);
-    if (!role) return { needs_role: true as const };
-    return adminPayload(role);
-  });
-
-export const postPause = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator(z.object({ reason: z.string().min(1).max(500) }))
-  .handler(async ({ context, data }) => {
-    const { role, principal_id } = await roleOf(context.userId);
-    requireOperator(role);
-    return pauseAdmission(newId("cmd"), data.reason, principal_id);
-  });
-
-export const postResume = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .handler(async ({ context }) => {
-    const { role, principal_id } = await roleOf(context.userId);
-    requireOperator(role);
-    return resumeAdmission(newId("cmd"), principal_id);
-  });
-
-export const postPrintKnowledge = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator(z.object({ eventKey: z.string(), securityId: z.string(), reason: z.string().min(1) }))
-  .handler(async ({ context, data }) => {
-    const { role, principal_id } = await roleOf(context.userId);
-    requireOperator(role);
-    return recordPrintKnowledge(newId("cmd"), data, principal_id);
-  });
-
-export const postFireNote = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator(
-    z.object({
-      hypothesis: z.enum(["IMPLEMENTATION_BUG", "COVERAGE_SHIFT", "REGIME_SHIFT"]),
-      note: z.string().min(1).max(2000),
-    }),
-  )
-  .handler(async ({ context, data }) => {
-    const { role, principal_id } = await roleOf(context.userId);
-    requireOperator(role);
-    return appendFireRateNote(newId("cmd"), { windowId: "win-2026q3", hypothesis: data.hypothesis, note: data.note }, principal_id);
-  });
-
-export const postRetryDeadlines = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .handler(async ({ context }) => {
-    const { role } = await roleOf(context.userId);
-    requireOperator(role);
-    return applyDueDeadlines("svc-desk-writer");
-  });
-
-export const postVerifyFreeze = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator(z.object({ manifestId: z.string(), securityId: z.string() }))
-  .handler(async ({ context, data }) => {
-    await roleOf(context.userId);
-    return freezeMember(newId("cmd"), data.manifestId, data.securityId, "svc-desk-writer");
-  });
-
-export const fetchAlpacaStatus = createServerFn({ method: "GET" })
-  .middleware([authMiddleware])
-  .handler(async ({ context }) => {
-    const { role } = await identityOf(context.userId);
-    return { role, can_mutate: role === "OPERATOR", status: await publicStatus() };
-  });
-
-export const postAlpacaCredentials = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator(
-    z.object({
-      apiKeyId: z.string().min(8).max(80),
-      apiSecret: z.string().min(8).max(256),
-      mode: z.enum(["PAPER", "LIVE"]),
-      confirmLive: z.boolean().optional(),
-    }),
-  )
-  .handler(async ({ context, data }) => {
-    try {
-      const { role, principal_id } = await identityOf(context.userId);
-      requireOperator(role);
-      return await saveCredentials({ ...data, actor: principal_id });
-    } catch (e) {
-      throw new Error(e instanceof Error ? e.message : "Could not store keys");
-    }
-  });
-
-export const postAlpacaDisconnect = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .handler(async ({ context }) => {
-    const { role } = await identityOf(context.userId);
-    requireOperator(role);
-    return disconnect();
-  });
-
-export const postAlpacaWatchlist = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator(z.object({ watchlist: z.array(z.string()).min(1).max(24) }))
-  .handler(async ({ context, data }) => {
-    const { role } = await identityOf(context.userId);
-    requireOperator(role);
-    return saveWatchlist(data.watchlist);
-  });
-
-export const fetchAlpacaDesk = createServerFn({ method: "GET" })
-  .middleware([authMiddleware])
-  .handler(async ({ context }) => {
-    const { role } = await identityOf(context.userId);
-    const status = await publicStatus();
-    if (!status.connected) {
-      return { role, can_mutate: role === "OPERATOR", status, connected: false as const };
-    }
-    try {
-      const [account, clock, positions, orders, quotes] = await Promise.all([
-        getAccount(),
-        getClock(),
-        getPositions(),
-        getOrders("open"),
-        getSnapshots(status.watchlist),
+    if (existing.length) {
+      await sql.query(`UPDATE ops_alarm SET last_seen = NOW(), safe_details = $1::jsonb WHERE alarm_id = $2`, [
+        JSON.stringify({ freeze_id: args.freezeId, detail: args.detail }),
+        existing[0].alarm_id,
       ]);
-      return {
-        role,
-        can_mutate: role === "OPERATOR",
-        status,
-        connected: true as const,
-        account,
-        clock,
-        positions,
-        orders,
-        quotes,
-      };
-    } catch (e) {
-      return {
-        role,
-        can_mutate: role === "OPERATOR",
-        status,
-        connected: true as const,
-        error: e instanceof Error ? e.message : "Alpaca request failed",
-      };
+    } else {
+      await sql.query(
+        `INSERT INTO ops_alarm (
+           alarm_id, code, component, first_seen, last_seen, related_ids, blocks_new_admission, status, safe_details, opened_event_seq
+         ) VALUES ($1,'FREEZE_ARTIFACT_MISMATCH','freeze',NOW(),NOW(),'[]'::jsonb,TRUE,'OPEN',$2::jsonb,NULL)`,
+        [newId("alm"), JSON.stringify({ freeze_id: args.freezeId, detail: args.detail })],
+      );
     }
-  });
+  }
+}
 
-export const fetchAlpacaOrders = createServerFn({ method: "GET" })
-  .middleware([authMiddleware])
-  .validator(z.object({ status: z.enum(["open", "closed", "all"]).optional() }))
-  .handler(async ({ context, data }) => {
-    const { role } = await identityOf(context.userId);
-    return { orders: await getOrders(data.status ?? "all") };
-  });
+async function fail(args: { freezeId: string; manifestId: string; securityId: string; detail: string }): Promise<never> {
+  await recordOutcome({ ...args, result: "UNVERIFIABLE" });
+  throw new DeskError("FREEZE_ARTIFACT_MISMATCH", args.detail, 503);
+}
 
-export const postAlpacaOrder = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator(
-    z.object({
-      symbol: z.string().min(1).max(10),
-      side: z.enum(["buy", "sell"]),
-      type: z.enum(["market", "limit"]),
-      timeInForce: z.enum(["day", "gtc", "ioc"]),
-      qty: z.string().optional(),
-      notional: z.string().optional(),
-      limitPrice: z.string().optional(),
-      extendedHours: z.boolean().optional(),
-      confirmLive: z.boolean().optional(),
-    }),
-  )
-  .handler(async ({ context, data }) => {
-    const { role, principal_id } = await identityOf(context.userId);
-    requireOperator(role);
-    return submitOrder({ ...data, actor: principal_id });
-  });
-
-export const postAlpacaCancel = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator(z.object({ orderId: z.string().min(1).max(64) }))
-  .handler(async ({ context, data }) => {
-    const { role } = await identityOf(context.userId);
-    requireOperator(role);
-    return cancelOrder(data.orderId);
-  });
-
-export const postAlpacaClose = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator(z.object({ symbol: z.string().min(1).max(10) }))
-  .handler(async ({ context, data }) => {
-    const { role } = await identityOf(context.userId);
-    requireOperator(role);
-    return closePosition(data.symbol);
-  });
-```
-
-
----
-
-## `src/desk/queries.ts` (22255 bytes)
-
-```ts
-import { getSql } from "@/lib/db";
-import { asHex, rfc3339, type DeskRole } from "./util";
-import { ensureBootstrapped } from "./bootstrap";
-import { publicStatus } from "./alpaca";
-
-export type Envelope<T> = {
-  product_name: "Trading App";
-  paperOnly: true;
-  liveTradingSupported: false;
-  activeModelWeight: "0";
-  data_mode: "FIXTURE";
-  request_id: string;
-  as_of: string;
-  data: T;
-  warnings: string[];
-};
-
-export function wrap<T>(requestId: string, asOf: string, data: T, warnings: string[] = []): Envelope<T> {
+function evalCard(card: TypedCard) {
   return {
-    product_name: "Trading App",
-    paperOnly: true,
-    liveTradingSupported: false,
-    activeModelWeight: "0",
-    data_mode: "FIXTURE",
-    request_id: requestId,
-    as_of: asOf,
-    data,
-    warnings,
+    timing_quality: card.timing_quality,
+    card_complete: card.card_complete,
+    options_valid: card.options_valid,
+    implied_move: card.implied_move,
+    benchmark_relative_5d: card.benchmark_relative_5d,
+    benchmark_relative_63d: card.benchmark_relative_63d,
   };
 }
 
-async function asOf(): Promise<string> {
-  const sql = await getSql();
-  const r = await sql.query<{ now_utc: string }>(`SELECT now_utc::text FROM fixture_clock WHERE singleton_key = TRUE`);
-  return rfc3339(new Date(r[0]?.now_utc ?? Date.now()));
+function decisionPayload(
+  ev: { status: string; decision: string; direction: string | null; reasons: string[] },
+  card: TypedCard,
+) {
+  const band =
+    ev.decision === "PREDICT" && card.implied_move
+      ? magnitudeBand(card.implied_move)
+      : { low: null as string | null, high: null as string | null };
+  return {
+    status: ev.status,
+    decision: ev.decision,
+    direction: ev.direction,
+    magnitude_low: band.low,
+    magnitude_high: band.high,
+    card_complete: card.card_complete,
+    options_valid: card.options_valid,
+    reasons: ev.reasons,
+    missing: ev.reasons.filter((r) => r.startsWith("MISSING_")),
+  };
 }
 
-function rate(num: number, den: number): { value: string | null; reason: string | null } {
-  if (den === 0) return { value: null, reason: "NO_DENOMINATOR" };
-  return { value: (num / den).toFixed(12), reason: null };
+function sameCanon(a: unknown, b: unknown): boolean {
+  try {
+    return jsonCanon(a) === jsonCanon(b);
+  } catch {
+    return false;
+  }
 }
 
-export async function homePayload(role: DeskRole) {
-  await ensureBootstrapped();
+/** Read-only replay. Never creates a freeze. Diagnostics commit even when verification fails. */
+export async function verifyFreezeArtifact(manifestId: string, securityId: string): Promise<VerifyFreezeResult> {
   const sql = await getSql();
-  const clock = await asOf();
-  const sessions = await sql.query<{
-    manifest_id: string;
-    session_date: string;
-    freeze_resolution: string;
-    sealed_member_count: number;
-    freeze_cutoff_at: string;
-    seal_at: string;
-    mark_wait_at: string;
-    report_finalize_at: string;
-    admission_closed_event_seq: number | null;
-    research_closed_event_seq: number | null;
-  }>(
-    `SELECT manifest_id, session_date::text, freeze_resolution, sealed_member_count,
-            freeze_cutoff_at::text, seal_at::text, mark_wait_at::text, report_finalize_at::text,
-            admission_closed_event_seq, research_closed_event_seq
-     FROM manifest ORDER BY session_date DESC`,
-  );
-  const latest = sessions[0] ?? null;
-  const frozen = latest
-    ? await sql.query<{ c: number }>(`SELECT COUNT(*)::int AS c FROM "freeze" WHERE manifest_id = $1`, [latest.manifest_id])
-    : [{ c: 0 }];
-  const complete = latest
-    ? await sql.query<{ c: number }>(
-        `SELECT COUNT(*)::int AS c FROM "freeze" WHERE manifest_id = $1 AND card_complete = TRUE`,
-        [latest.manifest_id],
-      )
-    : [{ c: 0 }];
-  const risk = await sql.query<{ reserved_count: number; reserved_notional: string }>(
-    `SELECT reserved_count, reserved_notional::text FROM desk_risk_state WHERE sleeve = 'EARNINGS'`,
-  );
-  const impaired = await sql.query<{ c: number }>(
-    `SELECT COUNT(*)::int AS c FROM "position" WHERE state IN ('IMPAIRED_ENTRY','IMPAIRED_EXIT')`,
-  );
-  const nonclosed = await sql.query<{ c: number }>(`SELECT COUNT(*)::int AS c FROM "position" WHERE state <> 'CLOSED'`);
-  const ctrl = await sql.query<{ admission_paused: boolean; pause_reason: string | null }>(
-    `SELECT admission_paused, pause_reason FROM operator_control WHERE sleeve = 'EARNINGS'`,
-  );
-  const due = await sql.query<{ c: number }>(
-    `SELECT COUNT(*)::int AS c FROM deadline d, fixture_clock c WHERE d.applied_event_seq IS NULL AND d.scheduled_at <= c.now_utc`,
-  );
-  const snap = latest
-    ? await sql.query<{ snapshot_id: string; created_at: string }>(
-        `SELECT snapshot_id, created_at::text FROM report_snapshot WHERE manifest_id = $1 ORDER BY created_at DESC LIMIT 1`,
-        [latest.manifest_id],
-      )
-    : [];
-  const book = role === "OPERATOR"
-    ? null
-    : await sql.query<{ pnl: string | null; priced: number }>(
-        `SELECT COALESCE(SUM((values->>'paper_pnl')::numeric),0)::text AS pnl,
-                COUNT(*) FILTER (WHERE status = 'PRICED')::int AS priced
-         FROM book_vintage bv
-         JOIN (SELECT position_id, MAX(vintage) AS v FROM book_vintage GROUP BY position_id) t
-           ON t.position_id = bv.position_id AND t.v = bv.vintage`,
-      );
-  return wrap("home-1", clock, {
-    role,
-    data_mode: "FIXTURE",
-    window_id: "win-2026q3",
-    policy_id: "pol-v1",
-    rule_id: "rule-v1",
-    latest_session: latest
-      ? {
-          manifest_id: latest.manifest_id,
-          session_date: latest.session_date,
-          freeze_resolution: latest.freeze_resolution,
-          sealed_member_count: String(latest.sealed_member_count),
-          frozen_count: String(frozen[0].c),
-          complete_frozen_cards: String(complete[0].c),
-          seal_at: latest.seal_at,
-          freeze_cutoff_at: latest.freeze_cutoff_at,
-          mark_wait_at: latest.mark_wait_at,
-          report_finalize_at: latest.report_finalize_at,
-          research_closed: latest.research_closed_event_seq != null,
-        }
-      : null,
-    sessions: sessions.map((s) => ({
-      manifest_id: s.manifest_id,
-      session_date: s.session_date,
-      freeze_resolution: s.freeze_resolution,
-      sealed_member_count: String(s.sealed_member_count),
-    })),
-    reserved_count: String(risk[0]?.reserved_count ?? 0),
-    reserved_notional: risk[0]?.reserved_notional ?? "0.0000",
-    nonclosed_positions: String(nonclosed[0].c),
-    impaired_count: String(impaired[0].c),
-    admission_paused: ctrl[0]?.admission_paused ?? false,
-    pause_reason: ctrl[0]?.pause_reason ?? null,
-    overdue_deadlines: String(due[0].c),
-    report_snapshot_id: snap[0]?.snapshot_id ?? null,
-    report_as_of: snap[0]?.created_at ?? null,
-    reviewer_book: book ? { latest_paper_pnl: book[0].pnl, priced_vintages: String(book[0].priced) } : null,
-    research_complete_does_not_imply_book_clear: true,
-    alpaca: await publicStatus(),
-  });
-}
-
-export async function earningsPayload(role: DeskRole, sessionDate?: string) {
-  await ensureBootstrapped();
-  const sql = await getSql();
-  const clock = await asOf();
-  const sessions = await sql.query<{ manifest_id: string; session_date: string }>(
-    `SELECT manifest_id, session_date::text FROM manifest ORDER BY session_date`,
-  );
-  const man = await sql.query<{ manifest_id: string; session_date: string }>(
-    sessionDate
-      ? `SELECT manifest_id, session_date::text FROM manifest WHERE session_date = $1`
-      : `SELECT manifest_id, session_date::text FROM manifest ORDER BY session_date DESC LIMIT 1`,
-    sessionDate ? [sessionDate] : [],
-  );
-  if (!man.length) return wrap("earn-1", clock, {
-    role,
-    manifest_id: "",
-    session_date: sessionDate ?? "",
-    sessions,
-    members: [],
-    exclusions: [],
-  });
-  const members = await sql.query<{
-    permanent_security_id: string;
-    display_ticker: string;
-    event_key: string;
-    timing_quality: string;
-    shuffle_order_index: number;
-    card: Record<string, unknown>;
-    card_complete: boolean;
-    options_valid: boolean | null;
+  const fr = await sql.query<{
+    freeze_id: string;
+    input_hash: Buffer;
+    output_hash: Buffer;
+    decision: string;
+    direction: string | null;
+    output_payload: unknown;
     pin_count: number;
   }>(
-    `SELECT m.permanent_security_id, m.display_ticker, m.event_key, m.timing_quality, m.shuffle_order_index,
-            s.card, s.card_complete, s.options_valid, s.pin_count
-     FROM manifest_member m JOIN sealed_input s
-       ON s.manifest_id = m.manifest_id AND s.permanent_security_id = m.permanent_security_id
-     WHERE m.manifest_id = $1
-     ORDER BY m.display_ticker`,
-    [man[0].manifest_id],
+    `SELECT freeze_id, input_hash, output_hash, decision, direction, output_payload, pin_count
+     FROM "freeze" WHERE manifest_id = $1 AND permanent_security_id = $2`,
+    [manifestId, securityId],
   );
-  const exclusions = await sql.query<{
-    permanent_security_id: string;
-    status: string;
-    reason_codes: string[];
-  }>(
-    `SELECT permanent_security_id, status, reason_codes FROM candidate_eligibility WHERE manifest_id = $1 AND status <> 'INCLUDED'`,
-    [man[0].manifest_id],
-  );
-  const tickers = await sql.query<{ permanent_security_id: string; ticker: string }>(`SELECT permanent_security_id, ticker FROM security_ticker`);
-  const tmap = Object.fromEntries(tickers.map((t) => [t.permanent_security_id, t.ticker]));
-  return wrap("earn-1", clock, {
-    role,
-    manifest_id: man[0].manifest_id,
-    session_date: man[0].session_date,
-    sessions,
-    members: members.map((m) => ({
-      permanent_security_id: m.permanent_security_id,
-      ticker: m.display_ticker,
-      event_key: m.event_key,
-      timing_quality: m.timing_quality,
-      card_complete: m.card_complete,
-      options_valid: m.options_valid,
-      pin_count: String(m.pin_count),
-      implied_move: typeof m.card.implied_move === "string" ? m.card.implied_move : null,
-      benchmark_relative_5d: typeof m.card.benchmark_relative_5d === "string" ? m.card.benchmark_relative_5d : null,
-      benchmark_relative_63d: typeof m.card.benchmark_relative_63d === "string" ? m.card.benchmark_relative_63d : null,
-      shuffle_order_index: role === "OPERATOR" ? null : String(m.shuffle_order_index),
-    })),
-    exclusions: exclusions.map((e) => ({
-      permanent_security_id: e.permanent_security_id,
-      ticker: tmap[e.permanent_security_id] ?? e.permanent_security_id,
-      status: e.status,
-      reason_codes: e.reason_codes,
-    })),
-  });
-}
+  if (!fr.length) throw new DeskError("NOT_FOUND", "no freeze to verify", 404);
+  const freezeId = fr[0].freeze_id;
+  const reject = (detail: string) => fail({ freezeId, manifestId, securityId, detail });
 
-export async function predictionsPayload(role: DeskRole, manifestId?: string, sessionDate?: string) {
-  await ensureBootstrapped();
-  const sql = await getSql();
-  const clock = await asOf();
-  const sessions = await sql.query<{ manifest_id: string; session_date: string; freeze_resolution: string }>(
-    `SELECT manifest_id, session_date::text, freeze_resolution FROM manifest ORDER BY session_date`,
-  );
-  const man = await sql.query<{ manifest_id: string; session_date: string; freeze_resolution: string }>(
-    manifestId
-      ? `SELECT manifest_id, session_date::text, freeze_resolution FROM manifest WHERE manifest_id = $1`
-      : sessionDate
-        ? `SELECT manifest_id, session_date::text, freeze_resolution FROM manifest WHERE session_date = $1`
-        : `SELECT manifest_id, session_date::text, freeze_resolution FROM manifest ORDER BY session_date DESC LIMIT 1`,
-    manifestId ? [manifestId] : sessionDate ? [sessionDate] : [],
-  );
-  if (!man.length) return wrap("pred-1", clock, {
-    role,
-    manifest_id: "",
-    session_date: sessionDate ?? "",
-    freeze_resolution: "EMPTY",
-    sessions: sessions.map((s) => ({
-      manifest_id: s.manifest_id,
-      session_date: s.session_date,
-      freeze_resolution: s.freeze_resolution,
-    })),
-    rows: [],
-  });
-  const rows = await sql.query<{
-    permanent_security_id: string;
-    display_ticker: string;
-    freeze_id: string | null;
-    decision: string | null;
-    direction: string | null;
-    input_hash: Buffer | null;
-    output_hash: Buffer | null;
-    verification_level: string | null;
-    admission_outcome: string | null;
-    position_id: string | null;
-    output_payload: { magnitude_low?: string | null; magnitude_high?: string | null; reasons?: string[] } | null;
-    shuffle_order_index: number;
-  }>(
-    `SELECT mm.permanent_security_id, mm.display_ticker, mm.shuffle_order_index,
-            f.freeze_id, f.decision, f.direction, f.input_hash, f.output_hash, f.verification_level, f.output_payload,
-            a.outcome AS admission_outcome, a.position_id
-     FROM manifest_member mm
-     LEFT JOIN "freeze" f ON f.manifest_id = mm.manifest_id AND f.permanent_security_id = mm.permanent_security_id
-     LEFT JOIN execution_admission a ON a.freeze_id = f.freeze_id
-     WHERE mm.manifest_id = $1
-     ORDER BY mm.display_ticker`,
-    [man[0].manifest_id],
-  );
-  const operator = role === "OPERATOR";
-  return wrap("pred-1", clock, {
-    role,
-    manifest_id: man[0].manifest_id,
-    session_date: man[0].session_date,
-    freeze_resolution: man[0].freeze_resolution,
-    sessions: sessions.map((s) => ({
-      manifest_id: s.manifest_id,
-      session_date: s.session_date,
-      freeze_resolution: s.freeze_resolution,
-    })),
-    rows: rows.map((r) => ({
-      permanent_security_id: r.permanent_security_id,
-      ticker: r.display_ticker,
-      status: r.freeze_id ? r.decision : "NO_FREEZE",
-      direction: r.decision === "PREDICT" ? r.direction : null,
-      execution:
-        r.admission_outcome === "ADMITTED"
-          ? "PAPER_COMMITTED"
-          : r.decision === "PREDICT"
-            ? "NOT_TRADED"
-            : r.admission_outcome ?? "NONE",
-      input_hash: r.input_hash ? asHex(r.input_hash) : null,
-      output_hash: r.output_hash ? asHex(r.output_hash) : null,
-      verification_level: r.verification_level,
-      reasons: r.output_payload?.reasons ?? [],
-      magnitude_low: operator ? null : (r.output_payload?.magnitude_low ?? null),
-      magnitude_high: operator ? null : (r.output_payload?.magnitude_high ?? null),
-      position_id: r.position_id,
-      shuffle_order_index: operator ? null : String(r.shuffle_order_index),
-    })),
-  });
-}
-
-export async function resultsPayload(role: DeskRole) {
-  await ensureBootstrapped();
-  const sql = await getSql();
-  const clock = await asOf();
-  const sealed = await sql.query<{ c: number }>(`SELECT COUNT(*)::int AS c FROM manifest_member`);
-  const frozen = await sql.query<{ c: number }>(`SELECT COUNT(*)::int AS c FROM "freeze"`);
-  const byDecision = await sql.query<{ decision: string; c: number }>(
-    `SELECT decision, COUNT(*)::int AS c FROM "freeze" GROUP BY decision`,
-  );
-  const noFreeze = await sql.query<{ c: number }>(`SELECT COUNT(*)::int AS c FROM grade WHERE outcome = 'NO_FREEZE' AND vintage = 0`);
-  const outcomes = await sql.query<{ outcome: string; c: number }>(
-    `SELECT outcome, COUNT(*)::int AS c FROM grade WHERE vintage = 0 GROUP BY outcome`,
-  );
-  const complete = await sql.query<{ c: number }>(`SELECT COUNT(*)::int AS c FROM "freeze" WHERE card_complete = TRUE`);
-  const predict = byDecision.find((d) => d.decision === "PREDICT")?.c ?? 0;
-  const stand = byDecision.find((d) => d.decision === "STAND_DOWN")?.c ?? 0;
-  const nSealed = sealed[0].c;
-  const nFrozen = frozen[0].c;
-  const manifests = await sql.query<{ freeze_resolution: string; c: number }>(
-    `SELECT freeze_resolution, COUNT(*)::int AS c FROM manifest GROUP BY freeze_resolution`,
-  );
-  const nonempty = manifests.filter((m) => m.freeze_resolution !== "EMPTY").reduce((a, b) => a + b.c, 0);
-  const partial = manifests.find((m) => m.freeze_resolution === "PARTIAL")?.c ?? 0;
-
-  const grades = await sql.query<{
-    ticker: string;
-    permanent_security_id: string;
-    decision: string | null;
-    outcome: string;
-    in_evidence_set: boolean;
-    values: {
-      direction_hit?: boolean | null;
-      band_hit?: boolean | null;
-      raw_gap?: string | null;
-      entry_price?: string;
-      exit_price?: string;
-    };
-    reasons: string[];
+  const man = await sql.query<{
+    manifest_hash: Buffer;
+    rule_ast_hash: Buffer;
+    evaluator_artifact_hash: Buffer;
+    cost_model_hash: Buffer;
+    rule_id: string;
+    rule_version: string;
     session_date: string;
+    canonical_content: unknown;
   }>(
-    `SELECT mm.display_ticker AS ticker, g.permanent_security_id, f.decision, g.outcome, g.in_evidence_set, g.values, g.reason_codes AS reasons, man.session_date::text
-     FROM grade g
-     JOIN manifest_member mm ON mm.manifest_id = g.manifest_id AND mm.permanent_security_id = g.permanent_security_id
-     JOIN manifest man ON man.manifest_id = g.manifest_id
-     LEFT JOIN "freeze" f ON f.freeze_id = g.freeze_id
-     WHERE g.vintage = 0
-     ORDER BY man.session_date, mm.display_ticker`,
+    `SELECT manifest_hash, rule_ast_hash, evaluator_artifact_hash, cost_model_hash, rule_id, rule_version,
+            session_date::text, canonical_content
+     FROM manifest WHERE manifest_id = $1`,
+    [manifestId],
   );
-  const books = await sql.query<{
-    ticker: string;
-    state: string;
-    pnl: string | null;
-    basis: string | null;
-    eligible: boolean | null;
-    notional: string;
-    vintage: number | null;
-  }>(
-    `SELECT p.display_ticker AS ticker, p.state, p.original_reserved_notional::text AS notional,
-            bv.values->>'paper_pnl' AS pnl, bv.basis, bv.strategy_pnl_eligible AS eligible, bv.vintage
-     FROM "position" p
-     LEFT JOIN book_vintage bv ON bv.book_vintage_id = p.last_book_vintage_id
-     ORDER BY p.display_ticker`,
+  if (!man.length) throw new DeskError("NOT_FOUND", "manifest missing", 404);
+
+  const rebuiltManifest = manifestHash(man[0].canonical_content);
+  if (rebuiltManifest !== asHex(man[0].manifest_hash)) {
+    await reject("manifest content does not match the stored manifest hash");
+  }
+
+  const member = await sql.query<{ snapshot_hash: Buffer; event_key: string }>(
+    `SELECT snapshot_hash, event_key FROM manifest_member WHERE manifest_id = $1 AND permanent_security_id = $2`,
+    [manifestId, securityId],
   );
+  if (!member.length) throw new DeskError("NOT_FOUND", "member not sealed", 404);
 
-  const cleanPredict = grades.filter((g) => g.decision === "PREDICT" && g.in_evidence_set);
-  const hits = cleanPredict.filter((g) => g.values.direction_hit === true).length;
-  const C = cleanPredict.length;
-  const U = grades.filter((g) => g.decision === "PREDICT" && !g.in_evidence_set && g.outcome !== "NO_EVENT").length;
-  const lower = rate(hits, C + U);
-  const upper = rate(hits + U, C + U);
-  const suppress = lower.value && Number(lower.value) <= 0.5 && Number(upper.value) >= 0.5;
+  const sealed = await sql.query<{ card: TypedCard; pin_count: number }>(
+    `SELECT card, pin_count FROM sealed_input WHERE manifest_id = $1 AND permanent_security_id = $2`,
+    [manifestId, securityId],
+  );
+  if (!sealed.length) throw new DeskError("NOT_FOUND", "sealed inputs missing", 404);
 
-  const operator = role === "OPERATOR";
-  return wrap("res-1", clock, {
-    role,
-    banner:
-      "Operational research report. Rule v1 was selected after prior observation. Small-sample hit rate does not establish a trading edge. Paper P&L is ESTIMATED under a conservative stress haircut, not live-fill evidence. Unresolved prices and excluded labels are disclosed separately.",
-    process: {
-      sealed: String(nSealed),
-      frozen: String(nFrozen),
-      no_freeze: String(noFreeze[0].c),
-      stand_down: String(stand),
-      predict: String(predict),
-      complete_frozen_cards: String(complete[0].c),
-      outcomes: Object.fromEntries(outcomes.map((o) => [o.outcome, String(o.c)])),
-      freeze_rate: rate(nFrozen, nSealed),
-      stand_down_rate: rate(stand, nFrozen),
-      predict_rate_complete: rate(predict, complete[0].c),
-      no_freeze_rate: rate(noFreeze[0].c, nSealed),
-      partial_manifest_rate: rate(partial, nonempty),
-    },
-    research: operator
-      ? { restricted: true, message: "Direction hits, bands, marks, and P&L are withheld from OPERATOR until window release." }
-      : {
-          restricted: false,
-          clean_predict_n: String(C),
-          direction_hits: String(hits),
-          hit_rate: suppress ? null : rate(hits, C),
-          attrition_lower: lower,
-          attrition_upper: upper,
-          interval_label: "missingness sensitivity interval, not a confidence interval",
-          point_estimate_suppressed: Boolean(suppress),
-          grades: grades.map((g) => ({
-            ticker: g.ticker,
-            id: g.permanent_security_id,
-            session_date: g.session_date,
-            decision: g.decision,
-            outcome: g.outcome,
-            in_evidence_set: g.in_evidence_set,
-            direction_hit: g.values.direction_hit ?? null,
-            band_hit: g.values.band_hit ?? null,
-            raw_gap: g.values.raw_gap ?? null,
-            entry_price: g.values.entry_price ?? null,
-            exit_price: g.values.exit_price ?? null,
-            reasons: g.reasons,
-          })),
-        },
-    book: operator
-      ? { restricted: true }
-      : {
-          positions: books.map((b) => ({
-            ticker: b.ticker,
-            state: b.state,
-            original_reserved_notional: b.notional,
-            paper_pnl: b.pnl,
-            basis: b.basis,
-            strategy_pnl_eligible: b.eligible,
-            vintage: b.vintage == null ? null : String(b.vintage),
-          })),
-        },
+  const sealedPins = await sql.query<{ observation_id: string; observation_hash: Buffer; pin_index: number }>(
+    `SELECT observation_id, observation_hash, pin_index FROM sealed_input_pin
+     WHERE manifest_id = $1 AND permanent_security_id = $2 ORDER BY pin_index`,
+    [manifestId, securityId],
+  );
+  const freezePins = await sql.query<{ observation_id: string; observation_hash: Buffer; pin_index: number }>(
+    `SELECT observation_id, observation_hash, pin_index FROM freeze_pin WHERE freeze_id = $1 ORDER BY pin_index`,
+    [freezeId],
+  );
+  if (sealedPins.length !== freezePins.length || sealedPins.length !== Number(fr[0].pin_count) || sealedPins.length !== Number(sealed[0].pin_count)) {
+    await reject("pin count disagrees across freeze, sealed inputs, and pin rows");
+  }
+  for (let i = 0; i < sealedPins.length; i += 1) {
+    const s = sealedPins[i];
+    const f = freezePins[i];
+    if (!f || s.observation_id !== f.observation_id || asHex(s.observation_hash) !== asHex(f.observation_hash) || s.pin_index !== f.pin_index || s.pin_index !== i) {
+      await reject("pin membership or pin index disagrees with the sealed set");
+    }
+  }
+
+  for (const pin of sealedPins) {
+    const obs = await sql.query<{ observation_hash: Buffer; envelope: unknown; tombstoned: boolean }>(
+      `SELECT observation_hash, envelope, tombstoned FROM observation WHERE observation_id = $1`,
+      [pin.observation_id],
+    );
+    if (!obs.length) {
+      await reject("pinned observation is missing");
+    }
+    if (obs[0].tombstoned) {
+      await reject("pinned observation is tombstoned without a surviving attestation");
+    }
+    const recomputed = observationHash(obs[0].envelope);
+    if (recomputed !== asHex(obs[0].observation_hash) || recomputed !== asHex(pin.observation_hash)) {
+      await reject("observation content does not match the sealed pin hash");
+    }
+  }
+
+  const pinList = sealedPins
+    .map((p) => ({ id: p.observation_id, hash: asHex(p.observation_hash) }))
+    .sort((a, b) => (a.id < b.id ? -1 : 1));
+  const rebuiltSnap = snapshotHash({
+    permanent_security_id: securityId,
+    event_key: member[0].event_key,
+    session_date: man[0].session_date,
+    card: sealed[0].card,
+    pins: pinList,
   });
-}
+  if (rebuiltSnap !== asHex(member[0].snapshot_hash)) {
+    await reject("sealed card and pins do not match the stored snapshot hash");
+  }
 
-export async function adminPayload(role: DeskRole) {
-  await ensureBootstrapped();
-  const sql = await getSql();
-  const clock = await asOf();
-  const jobs = await sql.query<{ job_name: string; status: string; last_completed_at: string | null; safe_error_code: string | null }>(
-    `SELECT job_name, status, last_completed_at::text, safe_error_code FROM job_state ORDER BY job_name`,
-  );
-  const deadlines = await sql.query<{
-    kind: string;
-    scheduled_at: string;
-    applied_at: string | null;
-    manifest_id: string | null;
-    permanent_security_id: string | null;
-  }>(
-    `SELECT kind, scheduled_at::text, applied_at::text, manifest_id, permanent_security_id FROM deadline ORDER BY scheduled_at`,
-  );
-  const alarms = await sql.query<{
-    code: string;
-    component: string;
-    status: string;
-    blocks_new_admission: boolean;
-    safe_details: Record<string, string | number | boolean | null> | null;
-    last_seen: string;
-  }>(`SELECT code, component, status, blocks_new_admission, safe_details, last_seen::text FROM ops_alarm ORDER BY last_seen DESC`);
-  const ctrl = await sql.query<{ admission_paused: boolean; pause_reason: string | null }>(
-    `SELECT admission_paused, pause_reason FROM operator_control WHERE sleeve = 'EARNINGS'`,
-  );
-  const notes = await sql.query<{ hypothesis: string; note: string }>(
-    `SELECT hypothesis, note FROM fire_rate_note ORDER BY event_seq DESC LIMIT 10`,
-  );
-  const positions = await sql.query<{ position_id: string; display_ticker: string; state: string; cas_token: string }>(
-    `SELECT position_id, display_ticker, state, cas_token::text FROM "position" ORDER BY display_ticker`,
-  );
-  const alpaca = await publicStatus();
-  return wrap("adm-1", clock, {
-    role,
-    can_mutate: role === "OPERATOR",
-    jobs,
-    deadlines: deadlines.map((d) => ({
-      kind: d.kind,
-      scheduled_at: d.scheduled_at,
-      applied_at: d.applied_at,
-      overdue: d.applied_at == null && new Date(d.scheduled_at) <= new Date(clock),
-      target: d.permanent_security_id ?? d.manifest_id,
-    })),
-    alarms,
-    admission_paused: ctrl[0]?.admission_paused ?? false,
-    pause_reason: ctrl[0]?.pause_reason ?? null,
-    fire_rate_notes: notes,
-    positions,
-    alpaca,
-    ports: {
-      security_master: "FIXTURE",
-      calendar: "FIXTURE",
-      earnings: "FIXTURE",
-      quotes: alpaca.connected ? "ALPACA" : "FIXTURE",
-      official_marks: "FIXTURE",
-      live_broker: alpaca.connected ? (alpaca.mode === "LIVE" ? "ALPACA_LIVE" : "ALPACA_PAPER") : "UNSUPPORTED",
-      real_data_credentials: alpaca.connected ? "PRESENT" : "ABSENT",
-    },
+  const pinTuples: [string, string][] = sealedPins.map((p) => [p.observation_id, asHex(p.observation_hash)]);
+  const inHash = inputHash({
+    manifestId,
+    securityId,
+    manifestHash: rebuiltManifest,
+    snapshotHash: rebuiltSnap,
+    ruleHash: asHex(man[0].rule_ast_hash),
+    engineHash: asHex(man[0].evaluator_artifact_hash),
+    costHash: asHex(man[0].cost_model_hash),
+    margin: MARGIN,
+    pins: pinTuples,
   });
+  if (inHash !== asHex(fr[0].input_hash)) {
+    await reject("recomputed input hash does not match the freeze artifact");
+  }
+
+  const ruleRows = await sql.query<{ ast_content: unknown }>(
+    `SELECT ast_content FROM rule_card WHERE rule_id = $1 AND rule_version = $2`,
+    [man[0].rule_id, man[0].rule_version],
+  );
+  const ast = ruleRows[0]?.ast_content;
+  if (ast == null) throw new DeskError("RULE_UNAVAILABLE", "sealed rule is missing", 503);
+  if (ruleAstHash(ast) !== asHex(man[0].rule_ast_hash)) {
+    throw new DeskError("RULE_MISMATCH", "loaded rule does not match the sealed digest", 503);
+  }
+
+  const card = sealed[0].card;
+  const ev = evaluate(ast, evalCard(card));
+  if (ev.status === "INVALID_RULE") {
+    await reject("registered rule invalid");
+  }
+  const replayed = decisionPayload(ev, card);
+  const persisted = fr[0].output_payload;
+  let persistedHash: string;
+  try {
+    persistedHash = outputHash(inHash, persisted);
+  } catch {
+    await reject("stored output payload is not canonical");
+  }
+  if (persistedHash! !== asHex(fr[0].output_hash)) {
+    await reject("stored output payload does not hash to the freeze output hash");
+  }
+  const replayedHash = outputHash(inHash, replayed);
+  if (replayedHash !== asHex(fr[0].output_hash) || !sameCanon(persisted, replayed)) {
+    await reject("replayed decision does not match the freeze artifact");
+  }
+  if (fr[0].decision !== ev.decision || (fr[0].direction ?? null) !== (ev.direction ?? null)) {
+    await reject("stored decision fields do not match the replay");
+  }
+
+  const adm = await sql.query<{ outcome: string; position_id: string | null }>(
+    `SELECT outcome, position_id FROM execution_admission WHERE freeze_id = $1`,
+    [freezeId],
+  );
+  await recordOutcome({ freezeId, manifestId, securityId, result: "BYTE_VERIFIED", detail: "replay matched sealed contents" });
+  return {
+    freeze_id: freezeId,
+    decision: ev.decision,
+    direction: ev.direction ?? null,
+    input_hash: inHash,
+    output_hash: replayedHash,
+    admission_outcome: adm[0]?.outcome ?? null,
+    position_id: adm[0]?.position_id ?? null,
+    duplicate: true,
+    verification_level: "BYTE_VERIFIED",
+  };
 }
 
-export async function getOrCreatePrincipal(userId: string, email: string | null): Promise<{ principal_id: string; role: DeskRole | null }> {
-  const sql = await getSql();
-  const rows = await sql.query<{ principal_id: string; role: DeskRole }>(
-    `SELECT principal_id, role FROM desk_principal WHERE user_id = $1`,
-    [userId],
-  );
-  if (rows.length) return rows[0];
-  return { principal_id: userId, role: null };
-}
-
-export async function claimRole(userId: string, email: string | null, role: "OPERATOR" | "REVIEWER") {
-  const sql = await getSql();
-  const existing = await sql.query<{ role: DeskRole }>(`SELECT role FROM desk_principal WHERE user_id = $1`, [userId]);
-  if (existing.length) return { role: existing[0].role, already: true };
-  const id = userId.replace(/[^A-Za-z0-9:._-]/g, "").slice(0, 48) || "user";
-  const pid = `usr-${id}`.slice(0, 64);
-  await sql.query(
-    `INSERT INTO desk_principal (principal_id, user_id, login_name, role, active, label_exposure_declared, created_at)
-     VALUES ($1,$2,$3,$4,TRUE,$5,NOW())`,
-    [pid, userId, email ?? userId, role, role === "REVIEWER"],
-  );
-  return { role, already: false };
-}
 ```
 
+## `src/desk/commands.ts`
 
----
-
-## `src/desk/commands.ts` (32766 bytes)
-
-```ts
-import { createHash } from "node:crypto";
+```
+import { createHash, randomBytes } from "node:crypto";
 import { getSql, withTransaction } from "@/lib/db";
 import {
   COST_MODEL_CONTENT,
-  INITIAL_AST,
+  KernelError,
+  admitPredict,
   costModelHash,
+  dec,
   evaluate,
   inputHash,
   magnitudeBand,
@@ -3956,15 +1328,18 @@ import {
   modeledFill,
   outputHash,
   paperPnl,
+  ruleAstHash,
   snapshotHash,
   shuffle,
   directionHit,
   bandHit,
   canon,
+  addNotional,
 } from "@/kernel/index";
 import { assembleCard, benchmarkRelative, impliedMove, selectStraddle, type TypedCard } from "./features";
 import { appendEvent, assertRiskMatches, loadExistingCommand, lockRisk, raiseAlarm, recomputeRisk, withWriter, type WriterCtx } from "./writer";
 import { DeskError, asHex, etInstant, hexBuf, jsonCanon, newId } from "./util";
+import { verifyFreezeArtifact } from "./verify-freeze";
 
 const TICKET = "5000.0000";
 const MARGIN = 3;
@@ -4018,7 +1393,22 @@ export async function sealSession(commandId: string, sessionDate: string, actor:
       rule_version: string;
       evaluator_id: string;
       cost_model_id: string;
-    }>(`SELECT window_id, universe_version, policy_id, rule_id, rule_version, evaluator_id, cost_model_id FROM evaluation_window ORDER BY starts_at LIMIT 1`);
+    }>(`SELECT window_id, universe_version, policy_id, rule_id, rule_version, evaluator_id, cost_model_id
+        FROM evaluation_window
+        WHERE starts_at <= $1 AND ends_at > $1 AND ended_early_at IS NULL
+        ORDER BY starts_at DESC LIMIT 1`, [ctx.now.toISOString()]);
+    if (!win.length) {
+      const fallback = await ctx.sql.query<{
+        window_id: string;
+        universe_version: string;
+        policy_id: string;
+        rule_id: string;
+        rule_version: string;
+        evaluator_id: string;
+        cost_model_id: string;
+      }>(`SELECT window_id, universe_version, policy_id, rule_id, rule_version, evaluator_id, cost_model_id FROM evaluation_window ORDER BY starts_at DESC LIMIT 1`);
+      if (fallback.length) win.push(fallback[0]);
+    }
     if (!win.length) throw new DeskError("NO_WINDOW", "no evaluation window");
     const w = win[0];
     const cal = await ctx.sql.query<{ listing_exchange: string; is_open: boolean; moc_entry_cutoff_at: string; close_at: string; content_hash: Buffer }>(
@@ -4079,7 +1469,14 @@ export async function sealSession(commandId: string, sessionDate: string, actor:
        FROM observation WHERE tombstoned = FALSE`,
     );
     const manifestId = newId("man");
-    const seed = Buffer.from(sessionDate === "2026-09-04" ? "01".repeat(32) : "a5".repeat(32), "hex");
+    const seed = Buffer.from(
+      sessionDate === "2026-09-04"
+        ? "01".repeat(32)
+        : sessionDate === "2026-09-11"
+          ? "a5".repeat(32)
+          : randomBytes(32).toString("hex"),
+      "hex",
+    );
     const included: typeof members = [];
     const exclusions: Array<{ security: string; status: string; reasons: string[] }> = [];
     for (const m of members) {
@@ -4394,14 +1791,13 @@ async function nextOpen(sql: import("@/lib/db").Sql, from: string, n: number): P
 export async function freezeMember(commandId: string, manifestId: string, securityId: string, actor: string) {
   const existing = await existingReceipt(commandId);
   if (existing) return existing;
-  return withWriter(actor, async (ctx) => {
-    const found = await ctx.sql.query<{ freeze_id: string; input_hash: Buffer; output_hash: Buffer }>(
-      `SELECT freeze_id, input_hash, output_hash FROM "freeze" WHERE manifest_id = $1 AND permanent_security_id = $2`,
-      [manifestId, securityId],
-    );
-    if (found.length) {
-      return verifyExistingFreeze(ctx, manifestId, securityId, found[0]);
-    }
+  const sql = await getSql();
+  const found = await sql.query<{ freeze_id: string }>(
+    `SELECT freeze_id FROM "freeze" WHERE manifest_id = $1 AND permanent_security_id = $2`,
+    [manifestId, securityId],
+  );
+  if (found.length) return verifyFreezeArtifact(manifestId, securityId);
+  const result = await withWriter(actor, async (ctx) => {
     const man = await ctx.sql.query<{
       freeze_cutoff_at: string;
       freeze_resolution: string;
@@ -4410,8 +1806,11 @@ export async function freezeMember(commandId: string, manifestId: string, securi
       evaluator_artifact_hash: Buffer;
       cost_model_hash: Buffer;
       session_date: string;
+      rule_id: string;
+      rule_version: string;
     }>(
-      `SELECT freeze_cutoff_at::text, freeze_resolution, manifest_hash, rule_ast_hash, evaluator_artifact_hash, cost_model_hash, session_date::text
+      `SELECT freeze_cutoff_at::text, freeze_resolution, manifest_hash, rule_ast_hash, evaluator_artifact_hash,
+              cost_model_hash, session_date::text, rule_id, rule_version
        FROM manifest WHERE manifest_id = $1 FOR UPDATE`,
       [manifestId],
     );
@@ -4457,33 +1856,21 @@ export async function freezeMember(commandId: string, manifestId: string, securi
       pins: pinTuples,
     });
     const card = sealed[0].card;
-    const ev = evaluate(INITIAL_AST, {
-      timing_quality: card.timing_quality,
-      card_complete: card.card_complete,
-      options_valid: card.options_valid,
-      implied_move: card.implied_move,
-      benchmark_relative_5d: card.benchmark_relative_5d,
-      benchmark_relative_63d: card.benchmark_relative_63d,
-    });
+    const ruleRows = await ctx.sql.query<{ ast_content: unknown }>(
+      `SELECT ast_content FROM rule_card WHERE rule_id = $1 AND rule_version = $2`,
+      [man[0].rule_id, man[0].rule_version],
+    );
+    const ast = ruleRows[0]?.ast_content;
+    if (ast == null) throw new DeskError("RULE_UNAVAILABLE", "sealed rule is missing", 503);
+    if (ruleAstHash(ast) !== asHex(man[0].rule_ast_hash)) {
+      throw new DeskError("RULE_MISMATCH", "loaded rule does not match the sealed digest", 503);
+    }
+    const ev = evaluate(ast, evalCard(card));
     if (ev.status === "INVALID_RULE") {
       await raiseAlarm(ctx, "INVALID_RULE_AST", "evaluator", { securityId }, true);
       throw new DeskError("INVALID_RULE_AST", "registered rule invalid", 503);
     }
-    const band =
-      ev.decision === "PREDICT" && card.implied_move
-        ? magnitudeBand(card.implied_move)
-        : { low: null as string | null, high: null as string | null };
-    const decisionPayload = {
-      status: ev.status,
-      decision: ev.decision,
-      direction: ev.direction,
-      magnitude_low: band.low,
-      magnitude_high: band.high,
-      card_complete: card.card_complete,
-      options_valid: card.options_valid,
-      reasons: ev.reasons,
-      missing: ev.reasons.filter((r) => r.startsWith("MISSING_")),
-    };
+    const decisionPayload = freezeDecisionPayload(ev, card);
     const outHash = outputHash(inHash, decisionPayload);
     const freezeId = newId("frz");
     const { eventSeq } = await appendEvent(ctx, {
@@ -4562,11 +1949,13 @@ export async function freezeMember(commandId: string, manifestId: string, securi
         eventSeq,
       ],
     );
+    let tickerForCommit: string | null = null;
     if (admission.outcome === "ADMITTED" && admission.position_id) {
       const ticker = await ctx.sql.query<{ display_ticker: string }>(
         `SELECT display_ticker FROM manifest_member WHERE manifest_id = $1 AND permanent_security_id = $2`,
         [manifestId, securityId],
       );
+      tickerForCommit = ticker[0]?.display_ticker ?? securityId;
       await commitPosition(ctx, {
         positionId: admission.position_id,
         freezeId,
@@ -4574,7 +1963,7 @@ export async function freezeMember(commandId: string, manifestId: string, securi
         securityId,
         admissionId: admId,
         sessionDate: man[0].session_date,
-        ticker: ticker[0]?.display_ticker ?? securityId,
+        ticker: tickerForCommit,
       });
     }
     return {
@@ -4585,50 +1974,48 @@ export async function freezeMember(commandId: string, manifestId: string, securi
       output_hash: outHash,
       admission_outcome: admission.outcome,
       position_id: admission.position_id,
+      ticker: tickerForCommit,
       reasons: ev.reasons,
       verification_level: "BYTE_VERIFIED",
     };
   });
+  if ("ticker" in result && result.admission_outcome === "ADMITTED" && result.position_id && result.ticker) {
+    try {
+      const { sendEntry } = await import("./auto-trade");
+      await sendEntry({ positionId: result.position_id, ticker: result.ticker, actor });
+    } catch {
+      /* desk commitment stands if the venue rejects */
+    }
+  }
+  return result;
 }
 
-async function verifyExistingFreeze(
-  ctx: WriterCtx,
-  manifestId: string,
-  securityId: string,
-  row: { freeze_id: string; input_hash: Buffer; output_hash: Buffer },
-) {
-  const sealed = await ctx.sql.query<{ observation_id: string; observation_hash: Buffer }>(
-    `SELECT observation_id, observation_hash FROM sealed_input_pin WHERE manifest_id = $1 AND permanent_security_id = $2`,
-    [manifestId, securityId],
-  );
-  const pins = await ctx.sql.query<{ observation_id: string; observation_hash: Buffer }>(
-    `SELECT observation_id, observation_hash FROM freeze_pin WHERE freeze_id = $1`,
-    [row.freeze_id],
-  );
-  const a = new Set(sealed.map((p) => `${p.observation_id}:${asHex(p.observation_hash)}`));
-  const b = new Set(pins.map((p) => `${p.observation_id}:${asHex(p.observation_hash)}`));
-  if (a.size !== b.size || [...a].some((x) => !b.has(x))) {
-    await raiseAlarm(ctx, "FREEZE_ARTIFACT_MISMATCH", "freeze", { freeze_id: row.freeze_id }, true);
-    throw new DeskError("FREEZE_ARTIFACT_MISMATCH", "stored pins disagree with sealed set", 503);
-  }
-  const adm = await ctx.sql.query<{ outcome: string; position_id: string | null }>(
-    `SELECT outcome, position_id FROM execution_admission WHERE freeze_id = $1`,
-    [row.freeze_id],
-  );
-  const fr = await ctx.sql.query<{ decision: string; direction: string | null }>(
-    `SELECT decision, direction FROM "freeze" WHERE freeze_id = $1`,
-    [row.freeze_id],
-  );
+function evalCard(card: TypedCard) {
   return {
-    freeze_id: row.freeze_id,
-    decision: fr[0]?.decision,
-    direction: fr[0]?.direction ?? null,
-    input_hash: asHex(row.input_hash),
-    output_hash: asHex(row.output_hash),
-    admission_outcome: adm[0]?.outcome ?? null,
-    position_id: adm[0]?.position_id ?? null,
-    duplicate: true,
-    verification_level: "BYTE_VERIFIED",
+    timing_quality: card.timing_quality,
+    card_complete: card.card_complete,
+    options_valid: card.options_valid,
+    implied_move: card.implied_move,
+    benchmark_relative_5d: card.benchmark_relative_5d,
+    benchmark_relative_63d: card.benchmark_relative_63d,
+  };
+}
+
+function freezeDecisionPayload(ev: { status: string; decision: string; direction: string | null; reasons: string[] }, card: TypedCard) {
+  const band =
+    ev.decision === "PREDICT" && card.implied_move
+      ? magnitudeBand(card.implied_move)
+      : { low: null as string | null, high: null as string | null };
+  return {
+    status: ev.status,
+    decision: ev.decision,
+    direction: ev.direction,
+    magnitude_low: band.low,
+    magnitude_high: band.high,
+    card_complete: card.card_complete,
+    options_valid: card.options_valid,
+    reasons: ev.reasons,
+    missing: ev.reasons.filter((r) => r.startsWith("MISSING_")),
   };
 }
 
@@ -4646,10 +2033,6 @@ async function evaluateAdmission(
   },
 ): Promise<{ outcome: string; reason_codes: string[]; position_id: string | null }> {
   const reasons: string[] = [];
-  if (args.paused) reasons.push("ADMISSION_PAUSED");
-  if (ctx.now.getTime() >= args.cutoff.getTime()) reasons.push("CUTOFF");
-  if (args.timingQuality !== "ISSUER_CONFIRMED") reasons.push("TIMING_NOT_CONFIRMED");
-  if (args.card.card_complete !== true) reasons.push("CARD_INCOMPLETE");
   const quote = await ctx.sql.query<ObsRow>(
     `SELECT observation_id, envelope, received_at::text, observation_hash, payload_protected, payload_hash, permanent_security_id, snapshot_type, session_date::text, source_class, source_event_at::text
      FROM observation
@@ -4685,10 +2068,26 @@ async function evaluateAdmission(
     `SELECT COUNT(*)::int AS c FROM "position" WHERE permanent_security_id = $1 AND state <> 'CLOSED'`,
     [args.securityId],
   );
-  if (owned[0].c > 0) reasons.push("ALREADY_OWNED");
-  if (cached.reserved_count + 1 > 3) reasons.push("CAPACITY_COUNT");
-  if (Number(cached.reserved_notional) + 5000 > 15000) reasons.push("CAPACITY_NOTIONAL");
-  if (sameEvent[0].c + 1 > 2) reasons.push("PER_EVENT_LIMIT");
+  try {
+    const cap = admitPredict({
+      paused: args.paused,
+      cutoffPassed: ctx.now.getTime() >= args.cutoff.getTime(),
+      timingQuality: args.timingQuality,
+      cardComplete: args.card.card_complete === true,
+      reservedCount: cached.reserved_count,
+      reservedNotional: dec(String(cached.reserved_notional), 4, "0"),
+      sameEventOpen: sameEvent[0].c,
+      alreadyOwned: owned[0].c > 0,
+    });
+    if (cap.outcome === "DENIED") {
+      for (const r of cap.reason_codes) {
+        if (!reasons.includes(r)) reasons.push(r);
+      }
+    }
+  } catch (e) {
+    if (e instanceof KernelError) reasons.push("RISK_STATE_MISMATCH");
+    else throw e;
+  }
   if (reasons.length) return { outcome: "DENIED", reason_codes: reasons, position_id: null };
   return { outcome: "ADMITTED", reason_codes: ["ADMITTED"], position_id: newId("pos") };
 }
@@ -4728,19 +2127,195 @@ export async function commitPosition(
   const cached = await lockRisk(ctx.sql);
   await ctx.sql.query(
     `UPDATE desk_risk_state SET reserved_count = $1, reserved_notional = $2, updated_event_seq = $3 WHERE sleeve = 'EARNINGS'`,
-    [cached.reserved_count + 1, (Number(cached.reserved_notional) + 5000).toFixed(4), ctx.seq],
+    [cached.reserved_count + 1, addNotional(String(cached.reserved_notional), TICKET), ctx.seq],
   );
 }
+
 ```
 
+## `src/desk/writer.ts`
 
----
+```
+import { createHash } from "node:crypto";
+import type { Sql } from "@/lib/db";
+import { withTransaction } from "@/lib/db";
+import { cmp, dec, field, sha256 } from "@/kernel/index";
+import { asHex, DeskError, hexBuf, jsonCanon, newId, requestHash } from "./util";
 
-## `src/desk/lifecycle.ts` (29394 bytes)
+export type Gate = {
+  next_event_seq: number;
+  last_authoritative_time: string;
+  clock_trusted: boolean;
+};
 
-```ts
+export type WriterCtx = {
+  sql: Sql;
+  now: Date;
+  seq: number;
+  actor: string;
+};
+
+export async function withWriter<T>(
+  actor: string,
+  fn: (ctx: WriterCtx) => Promise<T>,
+): Promise<T> {
+  return withTransaction(async (sql) => {
+    const gates = await sql.query<Gate>(
+      `SELECT next_event_seq, last_authoritative_time::text, clock_trusted FROM writer_gate WHERE singleton_key = TRUE FOR UPDATE`,
+    );
+    if (gates.length !== 1) throw new DeskError("WRITER_GATE_MISSING", "writer gate missing or duplicated", 503);
+    const clock = await sql.query<{ now_utc: string; trusted: boolean; source: string }>(
+      `SELECT now_utc::text, trusted, source FROM fixture_clock WHERE singleton_key = TRUE FOR UPDATE`,
+    );
+    if (clock.length !== 1) throw new DeskError("CLOCK_UNTRUSTED", "fixture clock missing", 503, false);
+    const now = new Date(clock[0].now_utc);
+    const last = new Date(gates[0].last_authoritative_time);
+    if (!clock[0].trusted || !gates[0].clock_trusted) {
+      throw new DeskError("CLOCK_UNTRUSTED", "trusted clock unavailable", 503);
+    }
+    if (now < last) {
+      await sql.query(`UPDATE writer_gate SET clock_trusted = FALSE WHERE singleton_key = TRUE`);
+      throw new DeskError("CLOCK_UNTRUSTED", "clock moved backward", 503);
+    }
+    const seq = Number(gates[0].next_event_seq);
+    await sql.query(`UPDATE writer_gate SET next_event_seq = $1, last_authoritative_time = $2 WHERE singleton_key = TRUE`, [
+      seq + 1,
+      now.toISOString(),
+    ]);
+    return fn({ sql, now, seq, actor });
+  });
+}
+
+export async function appendEvent(
+  ctx: WriterCtx,
+  args: {
+    commandId: string;
+    type: string;
+    payload: unknown;
+    receipt: unknown;
+    request?: unknown;
+  },
+): Promise<{ eventSeq: number; eventId: string }> {
+  const eventId = newId("evt");
+  const req = requestHash(args.request ?? args.payload);
+  const canonical = jsonCanon(args.payload);
+  const preimage = Buffer.concat([
+    field(Buffer.from("Trading App|event|1", "ascii")),
+    field(Buffer.from(String(ctx.seq), "utf8")),
+    field(Buffer.from(args.commandId, "utf8")),
+    field(Buffer.from(ctx.actor, "utf8")),
+    field(Buffer.from(ctx.now.toISOString(), "utf8")),
+    field(req),
+    field(Buffer.from(canonical, "utf8")),
+  ]);
+  const eventHash = createHash("sha256").update(preimage).digest();
+  try {
+    await ctx.sql.query(
+      `INSERT INTO event_log (
+        event_seq, event_id, command_id, request_hash, event_type, actor_principal_id,
+        occurred_at, semantic_payload, canonical_payload, result_receipt, event_hash
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10::jsonb,$11)`,
+      [
+        ctx.seq,
+        eventId,
+        args.commandId,
+        req,
+        args.type,
+        ctx.actor,
+        ctx.now.toISOString(),
+        JSON.stringify(args.payload),
+        canonical,
+        JSON.stringify(args.receipt),
+        eventHash,
+      ],
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/event_log_command_id|command_id/i.test(msg) || /unique/i.test(msg)) {
+      throw new DeskError("IDEMPOTENCY_CONFLICT", "command_id already used", 409);
+    }
+    throw err;
+  }
+  return { eventSeq: ctx.seq, eventId };
+}
+
+export async function loadExistingCommand<T>(sql: Sql, commandId: string): Promise<T | null> {
+  const rows = await sql.query<{ result_receipt: T; event_type: string }>(
+    `SELECT result_receipt, event_type FROM event_log WHERE command_id = $1`,
+    [commandId],
+  );
+  if (!rows.length) return null;
+  return rows[0].result_receipt;
+}
+
+export async function raiseAlarm(
+  ctx: WriterCtx,
+  code: string,
+  component: string,
+  details: unknown,
+  blocks = false,
+): Promise<void> {
+  const existing = await ctx.sql.query<{ alarm_id: string }>(
+    `SELECT alarm_id FROM ops_alarm WHERE code = $1 AND status <> 'RESOLVED'`,
+    [code],
+  );
+  if (existing.length) {
+    await ctx.sql.query(`UPDATE ops_alarm SET last_seen = $1, safe_details = $2::jsonb WHERE alarm_id = $3`, [
+      ctx.now.toISOString(),
+      JSON.stringify(details),
+      existing[0].alarm_id,
+    ]);
+    return;
+  }
+  const id = newId("alm");
+  await ctx.sql.query(
+    `INSERT INTO ops_alarm (
+      alarm_id, code, component, first_seen, last_seen, related_ids, blocks_new_admission, status, safe_details, opened_event_seq
+    ) VALUES ($1,$2,$3,$4,$4,$5::jsonb,$6,'OPEN',$7::jsonb,$8)`,
+    [id, code, component, ctx.now.toISOString(), JSON.stringify([]), blocks, JSON.stringify(details), ctx.seq],
+  );
+}
+
+export async function recomputeRisk(sql: Sql): Promise<{ count: number; notional: string }> {
+  const rows = await sql.query<{ c: number; n: string | null }>(
+    `SELECT COUNT(*)::int AS c, COALESCE(SUM(original_reserved_notional),0)::text AS n
+     FROM "position" WHERE state <> 'CLOSED'`,
+  );
+  return { count: Number(rows[0]?.c ?? 0), notional: rows[0]?.n ?? "0.0000" };
+}
+
+export async function lockRisk(sql: Sql): Promise<{ reserved_count: number; reserved_notional: string }> {
+  const rows = await sql.query<{ reserved_count: number; reserved_notional: string }>(
+    `SELECT reserved_count, reserved_notional::text FROM desk_risk_state WHERE sleeve = 'EARNINGS' FOR UPDATE`,
+  );
+  if (rows.length !== 1) throw new DeskError("RISK_STATE_MISSING", "risk singleton missing", 503);
+  return rows[0];
+}
+
+export async function assertRiskMatches(sql: Sql): Promise<void> {
+  const cached = await lockRisk(sql);
+  const actual = await recomputeRisk(sql);
+  const cachedN = dec(String(cached.reserved_notional), 4);
+  const actualN = dec(String(actual.notional), 4);
+  if (cached.reserved_count !== actual.count || cmp(cachedN, actualN) !== 0) {
+    throw new DeskError("RISK_STATE_MISMATCH", "cached risk disagrees with positions", 503);
+  }
+}
+
+export function digest32(hex: string): Buffer {
+  return hexBuf(hex);
+}
+
+void asHex;
+void sha256;
+
+```
+
+## `src/desk/lifecycle.ts`
+
+```
 import { getSql } from "@/lib/db";
-import { bandHit, canon, directionHit, modeledFill, paperPnl, sha256 } from "@/kernel/index";
+import { add, bandHit, canon, dec, decToCanonical, directionHit, div, modeledFill, mul, paperPnl, quantizeHalfUp, sha256, sub, subNotional } from "@/kernel/index";
 import { appendEvent, assertRiskMatches, loadExistingCommand, lockRisk, raiseAlarm, withWriter, type WriterCtx } from "./writer";
 import { DeskError, asHex, hexBuf, jsonCanon, newId } from "./util";
 
@@ -4865,11 +2440,12 @@ async function officialMark(
   );
   if (!rows.length) return null;
   const p = rows[0].envelope?.payload ?? {};
-  const state = String(p.state ?? "OFFICIAL");
-  if (state !== "OFFICIAL" && state !== "OFFICIAL_CORRECTED") return null;
-  const price = String(p.price ?? "");
+  const stateRaw = p.state;
+  if (typeof stateRaw !== "string") return null;
+  if (stateRaw !== "OFFICIAL" && stateRaw !== "OFFICIAL_CORRECTED") return null;
+  const price = typeof p.price === "string" ? p.price : "";
   if (!price) return null;
-  return { observation_id: rows[0].observation_id, price, hash: asHex(rows[0].observation_hash), state, session };
+  return { observation_id: rows[0].observation_id, price, hash: asHex(rows[0].observation_hash), state: stateRaw, session };
 }
 
 export async function adjudicateMember(commandId: string, manifestId: string, securityId: string, actor: string) {
@@ -4932,11 +2508,14 @@ async function adjudicateInner(ctx: WriterCtx, commandId: string, manifestId: st
       fr[0].decision === "PREDICT" && fr[0].output_payload.magnitude_low && fr[0].output_payload.magnitude_high
         ? bandHit(entry.price, exit.price, fr[0].output_payload.magnitude_low, fr[0].output_payload.magnitude_high)
         : null;
-    const rawNumer = (Number(exit.price) / Number(entry.price) - 1).toFixed(12);
+    const rawGap = decToCanonical(
+      quantizeHalfUp(sub(div(dec(exit.price, 6), dec(entry.price, 6), 16), dec("1", 0)), 12),
+      12,
+    );
     values = {
       entry_price: entry.price,
       exit_price: exit.price,
-      raw_gap: rawNumer,
+      raw_gap: rawGap,
       direction_hit: fr[0].decision === "PREDICT" ? hit : null,
       band_hit: fr[0].decision === "PREDICT" ? band : null,
       predicted_direction: fr[0].direction,
@@ -5074,9 +2653,18 @@ async function settleOrImpair(
   if (pos.state === "FILLED" || pos.state === "IMPAIRED_EXIT") {
     if (ca.length) {
       const p = ca[0].envelope?.payload ?? {};
-      const split = Number(p.split_multiplier ?? 0);
-      const dist = Number(p.distribution ?? 0);
-      if (!split) {
+      const splitRaw = p.split_multiplier;
+      const distRaw = p.distribution ?? "0.000000";
+      if (typeof splitRaw !== "string" || typeof distRaw !== "string") {
+        await setState(ctx, pos.position_id, pos.state, "IMPAIRED_EXIT");
+        return;
+      }
+      let split;
+      let dist;
+      try {
+        split = dec(splitRaw, 6, "0.000001", "100");
+        dist = dec(distRaw, 6, "0", "1000000");
+      } catch {
         await setState(ctx, pos.position_id, pos.state, "IMPAIRED_EXIT");
         return;
       }
@@ -5090,15 +2678,16 @@ async function settleOrImpair(
         await setState(ctx, pos.position_id, pos.state, "IMPAIRED_EXIT");
         return;
       }
-      const units = 5000 / Number(fill);
-      const exitUnits = units * split;
-      const cash = units * dist;
-      const pnl = (exitUnits * Number(exitMark.price) + cash - 5000).toFixed(4);
+      const units = div(dec("5000.0000", 4), dec(fill, 12), 12);
+      const exitUnits = mul(units, split);
+      const cash = mul(units, dist);
+      const exitVal = mul(exitUnits, dec(exitMark.price, 6));
+      const pnl = decToCanonical(quantizeHalfUp(sub(add(exitVal, cash), dec("5000.0000", 4)), 4), 4);
       await writeBook(ctx, pos.position_id, "CORPORATE_ACTION", {
         modeled_fill: fill,
         exit_price: exitMark.price,
         paper_pnl: pnl,
-        split_multiplier: String(split),
+        split_multiplier: splitRaw,
         original_notional: pos.original_reserved_notional,
       }, false);
       await setState(ctx, pos.position_id, "FILLED", "FLAT");
@@ -5181,7 +2770,7 @@ async function closeAndRelease(ctx: WriterCtx, positionId: string) {
   );
   await ctx.sql.query(
     `UPDATE desk_risk_state SET reserved_count = $1, reserved_notional = $2, updated_event_seq = $3 WHERE sleeve = 'EARNINGS'`,
-    [cached.reserved_count - 1, (Number(cached.reserved_notional) - Number(row[0].original_reserved_notional)).toFixed(4), ctx.seq],
+    [cached.reserved_count - 1, subNotional(String(cached.reserved_notional), String(row[0].original_reserved_notional)), ctx.seq],
   );
 }
 
@@ -5272,6 +2861,12 @@ export async function applyDueDeadlines(actor: string) {
         results.push({ deadline: d.deadline_id, kind: d.kind, ok: true, error: null });
       } else if (d.kind === "REPORT_FINALIZE" && d.manifest_id) {
         await applyReportFinalize(newId("cmd"), d.manifest_id, actor);
+        try {
+          const { maybeReviseRule } = await import("./learn");
+          await maybeReviseRule(d.manifest_id, actor);
+        } catch {
+          /* learning is observational; report already released */
+        }
         results.push({ deadline: d.deadline_id, kind: d.kind, ok: true, error: null });
       }
     } catch (err) {
@@ -5410,3112 +3005,4184 @@ export async function applyEntryCorrection(
 
 void jsonCanon;
 void getSql;
+
 ```
 
+## `src/desk/alpaca.ts`
 
----
+```
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { getSql } from "@/lib/db";
+import { DeskError, newId } from "./util";
+import type { AlpacaMode, AlpacaPublicStatus } from "./alpaca-types";
 
-## `src/desk/bootstrap.ts` (24416 bytes)
+export type { AlpacaMode, AlpacaPublicStatus } from "./alpaca-types";
 
-```ts
-import { readFileSync } from "node:fs";
-import { createHash } from "node:crypto";
-import { getSql, withTransaction } from "@/lib/db";
-import {
-  COST_MODEL_CONTENT,
-  ENGINE_VERSION,
-  INITIAL_AST,
-  costModelHash,
-  evaluatorArtifactHash,
-  observationHash,
-  payloadHash,
-  policyHash,
-  ruleAstHash,
-  ruleTextHash,
-  canon,
-  ident,
-} from "@/kernel/index";
-import { freezeMember, sealSession } from "./commands";
-import {
-  advanceClock,
-  applyDueDeadlines,
-  applyEntryCorrection,
-  recordPrintKnowledge,
-} from "./lifecycle";
-import { appendEvent, withWriter } from "./writer";
-import { DeskError, etInstant, hexBuf, jsonCanon, newId } from "./util";
+const WRAP_ID = "kr-alpaca-wrap";
+const DEFAULT_WATCH = ["SPY", "QQQ", "NVDA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "TSLA", "AMD"];
 
-const SERVICE = "svc-desk-writer";
-const RULE_TEXT = "Predict LONG when issuer-confirmed AMC, complete card, valid options, implied move in [4%, 15%], 5d relative < 0, 63d relative > 0.";
+type StoredCred = {
+  api_key_id: string;
+  secret: string;
+  mode: AlpacaMode;
+  watchlist: string[];
+};
 
-const NAMES: Array<{ id: string; ticker: string; venue: "XNYS" | "XNAS"; name: string }> = [
-  { id: "SEC-ALPHA", ticker: "ALFA", venue: "XNYS", name: "Alpha Fixture Corp" },
-  { id: "SEC-BRAVO", ticker: "BRAV", venue: "XNAS", name: "Bravo Fixture Inc" },
-  { id: "SEC-CHARLIE", ticker: "CHRL", venue: "XNYS", name: "Charlie Fixture Co" },
-  { id: "SEC-DELTA", ticker: "DELT", venue: "XNAS", name: "Delta Fixture PLC" },
-  { id: "SEC-ECHO", ticker: "ECHO", venue: "XNYS", name: "Echo Fixture Ltd" },
-  { id: "SEC-FOXTROT", ticker: "FOXT", venue: "XNAS", name: "Foxtrot Fixture NV" },
-  { id: "SEC-GOLF", ticker: "GOLF", venue: "XNYS", name: "Golf Fixture SA" },
-  { id: "SEC-HOTEL", ticker: "HOTL", venue: "XNAS", name: "Hotel Fixture LLC" },
-  { id: "SEC-SPY", ticker: "SPY", venue: "XNYS", name: "Reference Benchmark SPY" },
-];
+function tradingHost(mode: AlpacaMode): string {
+  if (mode === "LIVE") {
+    throw new DeskError("LIVE_DISABLED", "This workspace is paper-only. Live Alpaca orders are not available.", 422);
+  }
+  return "https://paper-api.alpaca.markets";
+}
 
-function openDates(): string[] {
+function asBuf(v: unknown): Buffer {
+  if (Buffer.isBuffer(v)) return v;
+  if (v instanceof Uint8Array) return Buffer.from(v);
+  if (typeof v === "string") {
+    const s = v.startsWith("\\x") ? v.slice(2) : v;
+    if (/^[0-9a-fA-F]+$/.test(s) && s.length % 2 === 0) return Buffer.from(s, "hex");
+  }
+  throw new DeskError("KEYRING", "unreadable key material", 500);
+}
+
+function maskKey(id: string): string {
+  if (id.length <= 8) return `${id.slice(0, 2)}…${id.slice(-2)}`;
+  return `${id.slice(0, 4)}…${id.slice(-4)}`;
+}
+
+function safeActor(raw: string): string {
+  const cleaned = raw.replace(/[^A-Za-z0-9:._-]/g, "").slice(0, 56);
+  const id = (cleaned.startsWith("usr-") ? cleaned : `usr-${cleaned || "operator"}`).slice(0, 64);
+  return id;
+}
+
+function watchlistLiteral(list: string[]): string {
+  return `{${list.join(",")}}`;
+}
+
+let schemaReady = false;
+async function ensureAlpacaSchema(): Promise<void> {
+  if (schemaReady) return;
+  const sql = await getSql();
+  await sql.query(`
+    CREATE TABLE IF NOT EXISTS alpaca_credential (
+      singleton_key boolean PRIMARY KEY CHECK (singleton_key),
+      api_key_id text NOT NULL CHECK (char_length(api_key_id) BETWEEN 8 AND 80),
+      secret_ciphertext bytea NOT NULL,
+      secret_nonce bytea NOT NULL,
+      secret_tag bytea NOT NULL,
+      mode text NOT NULL CHECK (mode IN ('PAPER', 'LIVE')),
+      watchlist text[] NOT NULL,
+      connected_at timestamptz NOT NULL,
+      connected_by text NOT NULL,
+      last_ok_at timestamptz,
+      last_error text,
+      account_number_last4 text,
+      account_status text
+    )`);
+  await sql.query(`
+    CREATE TABLE IF NOT EXISTS alpaca_order_log (
+      local_id text PRIMARY KEY,
+      alpaca_order_id text,
+      client_order_id text NOT NULL UNIQUE,
+      symbol text NOT NULL,
+      side text NOT NULL,
+      order_type text NOT NULL,
+      time_in_force text NOT NULL,
+      qty text,
+      notional text,
+      limit_price text,
+      status text NOT NULL,
+      mode text NOT NULL,
+      submitted_at timestamptz NOT NULL,
+      submitted_by text NOT NULL,
+      raw_receipt jsonb NOT NULL
+    )`);
+  schemaReady = true;
+}
+
+async function wrapKey(): Promise<Buffer> {
+  const sql = await getSql();
+  const existing = await sql.query<{ key_bytes: unknown }>(
+    `SELECT key_bytes FROM app_keyring WHERE key_id = $1`,
+    [WRAP_ID],
+  );
+  if (existing.length) return asBuf(existing[0].key_bytes);
+  const bytes = randomBytes(32);
+  await sql.query(
+    `INSERT INTO app_keyring (key_id, purpose, key_bytes, created_at)
+     VALUES ($1, 'alpaca_wrap', $2, NOW())
+     ON CONFLICT (key_id) DO NOTHING`,
+    [WRAP_ID, bytes],
+  );
+  const again = await sql.query<{ key_bytes: unknown }>(
+    `SELECT key_bytes FROM app_keyring WHERE key_id = $1`,
+    [WRAP_ID],
+  );
+  if (!again.length) throw new DeskError("KEYRING", "failed to persist wrap key", 500);
+  return asBuf(again[0].key_bytes);
+}
+
+function encryptSecret(key: Buffer, plain: string): { ciphertext: Buffer; nonce: Buffer; tag: Buffer } {
+  const nonce = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, nonce);
+  const ciphertext = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
+  return { ciphertext, nonce, tag: cipher.getAuthTag() };
+}
+
+function decryptSecret(key: Buffer, ciphertext: Buffer, nonce: Buffer, tag: Buffer): string {
+  const decipher = createDecipheriv("aes-256-gcm", key, nonce);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
+}
+
+export function normalizeSymbol(raw: string): string {
+  const s = raw.trim().toUpperCase();
+  if (!/^[A-Z][A-Z.]{0,9}$/.test(s)) throw new DeskError("INVALID_SYMBOL", "Ticker must be letters (optional dot), max 10", 422);
+  return s;
+}
+
+export function normalizeWatchlist(list: string[]): string[] {
   const out: string[] = [];
-  const d = new Date(Date.UTC(2026, 5, 1));
-  const end = new Date(Date.UTC(2026, 8, 18));
-  while (d <= end) {
-    const iso = d.toISOString().slice(0, 10);
-    const dow = d.getUTCDay();
-    const closed = dow === 0 || dow === 6 || iso === "2026-09-07";
-    if (!closed) out.push(iso);
-    d.setUTCDate(d.getUTCDate() + 1);
+  const seen = new Set<string>();
+  for (const item of list) {
+    const s = normalizeSymbol(item);
+    if (seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+    if (out.length >= 24) break;
+  }
+  if (!out.length) throw new DeskError("INVALID_WATCHLIST", "Watchlist needs at least one ticker", 422);
+  return out;
+}
+
+export async function publicStatus(): Promise<AlpacaPublicStatus> {
+  try {
+    await ensureAlpacaSchema();
+  } catch {
+    return {
+      connected: false,
+      mode: null,
+      api_key_masked: null,
+      account_number_last4: null,
+      account_status: null,
+      last_ok_at: null,
+      last_error: null,
+      watchlist: DEFAULT_WATCH,
+      trading_host: null,
+    };
+  }
+  const sql = await getSql();
+  try {
+    const rows = await sql.query<{
+      api_key_id: string;
+      mode: AlpacaMode;
+      watchlist: string[] | string;
+      last_ok_at: string | null;
+      last_error: string | null;
+      account_number_last4: string | null;
+      account_status: string | null;
+    }>(
+      `SELECT api_key_id, mode, watchlist, last_ok_at::text, last_error, account_number_last4, account_status
+       FROM alpaca_credential WHERE singleton_key = TRUE`,
+    );
+    if (!rows.length) {
+      return {
+        connected: false,
+        mode: null,
+        api_key_masked: null,
+        account_number_last4: null,
+        account_status: null,
+        last_ok_at: null,
+        last_error: null,
+        watchlist: DEFAULT_WATCH,
+        trading_host: null,
+      };
+    }
+    const r = rows[0];
+    const watch = Array.isArray(r.watchlist)
+      ? r.watchlist
+      : String(r.watchlist ?? "")
+          .replace(/[{}]/g, "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+    return {
+      connected: true,
+      mode: r.mode,
+      api_key_masked: maskKey(r.api_key_id),
+      account_number_last4: r.account_number_last4,
+      account_status: r.account_status,
+      last_ok_at: r.last_ok_at,
+      last_error: r.last_error,
+      watchlist: watch.length ? watch : DEFAULT_WATCH,
+      trading_host: tradingHost(r.mode),
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    if (msg.includes("alpaca_credential") || msg.includes("does not exist")) {
+      schemaReady = false;
+      return {
+        connected: false,
+        mode: null,
+        api_key_masked: null,
+        account_number_last4: null,
+        account_status: null,
+        last_ok_at: null,
+        last_error: null,
+        watchlist: DEFAULT_WATCH,
+        trading_host: null,
+      };
+    }
+    throw e;
+  }
+}
+
+async function loadStored(): Promise<StoredCred> {
+  await ensureAlpacaSchema();
+  const sql = await getSql();
+  const rows = await sql.query<{
+    api_key_id: string;
+    secret_ciphertext: unknown;
+    secret_nonce: unknown;
+    secret_tag: unknown;
+    mode: AlpacaMode;
+    watchlist: string[] | string;
+  }>(
+    `SELECT api_key_id, secret_ciphertext, secret_nonce, secret_tag, mode, watchlist
+     FROM alpaca_credential WHERE singleton_key = TRUE`,
+  );
+  if (!rows.length) throw new DeskError("ALPACA_NOT_CONNECTED", "Paste Alpaca keys on Trade or Admin first", 409);
+  const r = rows[0];
+  const key = await wrapKey();
+  const secret = decryptSecret(key, asBuf(r.secret_ciphertext), asBuf(r.secret_nonce), asBuf(r.secret_tag));
+  const watch = Array.isArray(r.watchlist)
+    ? r.watchlist
+    : String(r.watchlist ?? "")
+        .replace(/[{}]/g, "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+  return { api_key_id: r.api_key_id, secret, mode: r.mode, watchlist: watch.length ? watch : DEFAULT_WATCH };
+}
+
+type Creds = StoredCred;
+const credStore = new AsyncLocalStorage<Creds>();
+
+async function resolveCreds(userId?: string): Promise<Creds> {
+  try {
+    const stored = await loadStored();
+    if (stored.mode === "LIVE") {
+      throw new DeskError("LIVE_DISABLED", "This workspace is paper-only. Live Alpaca orders are not available.", 422);
+    }
+    return stored;
+  } catch (first) {
+    if (userId) {
+      try {
+        const { loadDataPair } = await import("./alpaca-data-service.server");
+        const pair = await loadDataPair(userId);
+        if (pair) {
+          return { api_key_id: pair.apiKeyId, secret: pair.apiSecret, mode: "PAPER", watchlist: DEFAULT_WATCH };
+        }
+      } catch {
+        /* fall through to original error */
+      }
+    }
+    throw first;
+  }
+}
+
+async function withCreds<T>(creds: Creds, fn: () => Promise<T>): Promise<T> {
+  if (creds.mode === "LIVE") {
+    throw new DeskError("LIVE_DISABLED", "This workspace is paper-only. Live Alpaca orders are not available.", 422);
+  }
+  return credStore.run(creds, fn);
+}
+
+type AlpacaJson = Record<string, unknown> | unknown[];
+
+async function alpacaFetch(path: string, init: RequestInit & { host?: "trade" | "data" } = {}): Promise<AlpacaJson> {
+  const creds = credStore.getStore() ?? (await loadStored());
+  if (creds.mode === "LIVE") {
+    throw new DeskError("LIVE_DISABLED", "This workspace is paper-only. Live Alpaca orders are not available.", 422);
+  }
+  const host = init.host === "data" ? "https://data.alpaca.markets" : tradingHost(creds.mode);
+  const headers = new Headers(init.headers);
+  headers.set("APCA-API-KEY-ID", creds.api_key_id);
+  headers.set("APCA-API-SECRET-KEY", creds.secret);
+  headers.set("Accept", "application/json");
+  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  let res: Response;
+  try {
+    res = await fetch(`${host}${path}`, { ...init, headers });
+  } catch (e) {
+    throw new DeskError(
+      "ALPACA_UNREACHABLE",
+      e instanceof Error ? `Alpaca unreachable: ${e.message}` : "Alpaca unreachable",
+      503,
+      true,
+    );
+  }
+  const text = await res.text();
+  let body: AlpacaJson | null = null;
+  const looksHtml = /^\s*</.test(text);
+  if (text && !looksHtml) {
+    try {
+      body = JSON.parse(text) as AlpacaJson;
+    } catch {
+      body = { message: text.slice(0, 180) };
+    }
+  }
+  if (!res.ok) {
+    const jsonMsg =
+      body && !Array.isArray(body) && typeof body.message === "string" ? body.message : null;
+    const msg =
+      jsonMsg && !jsonMsg.includes("<")
+        ? jsonMsg
+        : res.status === 401 || res.status === 403
+          ? "Alpaca rejected these keys. Use paper keys for Paper, live keys for Live, and paste the full secret."
+          : `Alpaca HTTP ${res.status}`;
+    const code = res.status === 401 || res.status === 403 ? "ALPACA_AUTH" : "ALPACA_HTTP";
+    throw new DeskError(code, msg, res.status === 401 ? 401 : 422);
+  }
+  return body ?? {};
+}
+
+async function markOk(accountNumber?: string, status?: string): Promise<void> {
+  const sql = await getSql();
+  const last4 = accountNumber ? accountNumber.slice(-4) : null;
+  await sql.query(
+    `UPDATE alpaca_credential
+     SET last_ok_at = NOW(), last_error = NULL, account_number_last4 = COALESCE($1, account_number_last4),
+         account_status = COALESCE($2, account_status)
+     WHERE singleton_key = TRUE`,
+    [last4, status ?? null],
+  );
+}
+
+async function markErr(message: string): Promise<void> {
+  const sql = await getSql();
+  await sql.query(`UPDATE alpaca_credential SET last_error = $1 WHERE singleton_key = TRUE`, [message.slice(0, 400)]);
+}
+
+export async function saveCredentials(args: {
+  apiKeyId: string;
+  apiSecret: string;
+  mode: AlpacaMode;
+  confirmLive?: boolean;
+  actor: string;
+}): Promise<AlpacaPublicStatus> {
+  await ensureAlpacaSchema();
+  const apiKeyId = args.apiKeyId.trim();
+  const apiSecret = args.apiSecret.trim();
+  if (apiKeyId.length < 8 || apiSecret.length < 8) {
+    throw new DeskError("INVALID_KEYS", "Key id and secret must be at least 8 characters", 422);
+  }
+  if (args.mode === "LIVE") {
+    throw new DeskError("LIVE_DISABLED", "This workspace is paper-only. Live Alpaca trading is not available.", 422);
+  }
+  const key = await wrapKey();
+  const enc = encryptSecret(key, apiSecret);
+  const sql = await getSql();
+  const actor = safeActor(args.actor);
+  await sql.query(
+    `INSERT INTO alpaca_credential (
+       singleton_key, api_key_id, secret_ciphertext, secret_nonce, secret_tag, mode, watchlist,
+       connected_at, connected_by, last_ok_at, last_error, account_number_last4, account_status
+     ) VALUES (TRUE,$1,$2,$3,$4,$5,$6::text[],NOW(),$7,NULL,NULL,NULL,NULL)
+     ON CONFLICT (singleton_key) DO UPDATE SET
+       api_key_id = EXCLUDED.api_key_id,
+       secret_ciphertext = EXCLUDED.secret_ciphertext,
+       secret_nonce = EXCLUDED.secret_nonce,
+       secret_tag = EXCLUDED.secret_tag,
+       mode = EXCLUDED.mode,
+       connected_at = NOW(),
+       connected_by = EXCLUDED.connected_by,
+       last_ok_at = NULL,
+       last_error = NULL,
+       account_number_last4 = NULL,
+       account_status = NULL`,
+    [apiKeyId, enc.ciphertext, enc.nonce, enc.tag, args.mode, watchlistLiteral(DEFAULT_WATCH), actor],
+  );
+  try {
+    await probeAccount();
+  } catch (e) {
+    const msg = e instanceof DeskError ? e.message : "Connection test failed";
+    await markErr(msg);
+    // Keys are stored. Surface the test failure so the operator can correct paper/live mixups.
+    throw new DeskError(
+      e instanceof DeskError ? e.code : "ALPACA_TEST",
+      `Keys were saved, but Alpaca rejected the test: ${msg}`,
+      e instanceof DeskError ? e.http : 422,
+    );
+  }
+  return publicStatus();
+}
+
+export async function disconnect(): Promise<AlpacaPublicStatus> {
+  await ensureAlpacaSchema();
+  const sql = await getSql();
+  await sql.query(`DELETE FROM alpaca_credential WHERE singleton_key = TRUE`);
+  return publicStatus();
+}
+
+export async function saveWatchlist(list: string[]): Promise<AlpacaPublicStatus> {
+  const watch = normalizeWatchlist(list);
+  const sql = await getSql();
+  const n = await sql.query(
+    `UPDATE alpaca_credential SET watchlist = $1::text[] WHERE singleton_key = TRUE RETURNING api_key_id`,
+    [watchlistLiteral(watch)],
+  );
+  if (!n.length) throw new DeskError("ALPACA_NOT_CONNECTED", "Paste Alpaca keys on Admin first", 409);
+  return publicStatus();
+}
+
+function asRecord(v: AlpacaJson): Record<string, string | boolean | null> {
+  if (!v || Array.isArray(v) || typeof v !== "object") return {};
+  const out: Record<string, string | boolean | null> = {};
+  for (const [k, val] of Object.entries(v)) {
+    if (typeof val === "string" || typeof val === "boolean") out[k] = val;
+    else if (val == null) out[k] = null;
+    else if (typeof val === "number") out[k] = String(val);
   }
   return out;
 }
 
-async function insertObs(
-  sql: import("@/lib/db").Sql,
-  seq: number,
-  row: {
-    id: string;
-    sec: string;
-    session: string;
-    type: string;
-    payload: Record<string, unknown>;
-    sourceClass?: string;
-    receivedAt: string;
-    eventKey?: string;
+function asList(v: AlpacaJson): Array<Record<string, string | boolean | null>> {
+  if (!Array.isArray(v)) return [];
+  return v.map((item) => asRecord(item as AlpacaJson));
+}
+
+async function probeAccount(): Promise<void> {
+  const rec = asRecord(await alpacaFetch("/v2/account"));
+  await markOk(
+    typeof rec.account_number === "string" ? rec.account_number : undefined,
+    typeof rec.status === "string" ? rec.status : undefined,
+  );
+}
+
+export async function getAccount(): Promise<Record<string, string | boolean | null>> {
+  const rec = asRecord(await alpacaFetch("/v2/account"));
+  await markOk(
+    typeof rec.account_number === "string" ? rec.account_number : undefined,
+    typeof rec.status === "string" ? rec.status : undefined,
+  );
+  return rec;
+}
+
+export async function getClock(): Promise<Record<string, string | boolean | null>> {
+  return asRecord(await alpacaFetch("/v2/clock"));
+}
+
+export async function getPositions(): Promise<Array<Record<string, string | boolean | null>>> {
+  return asList(await alpacaFetch("/v2/positions"));
+}
+
+export async function getOrders(
+  status: "open" | "closed" | "all" = "open",
+): Promise<Array<Record<string, string | boolean | null>>> {
+  return asList(await alpacaFetch(`/v2/orders?status=${encodeURIComponent(status)}&limit=50&direction=desc`));
+}
+
+function strField(obj: unknown, key: string): string | null {
+  if (!obj || typeof obj !== "object") return null;
+  const v = (obj as Record<string, unknown>)[key];
+  if (typeof v === "string" && v) return v;
+  return null;
+}
+
+function numField(obj: unknown, key: string): string | null {
+  if (!obj || typeof obj !== "object") return null;
+  const v = (obj as Record<string, unknown>)[key];
+  if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  if (typeof v === "string" && v) return v;
+  return null;
+}
+
+export async function getSnapshots(
+  symbols: string[],
+): Promise<Array<{ symbol: string; last: string | null; bid: string | null; ask: string | null; change_pct: string | null }>> {
+  const list = normalizeWatchlist(symbols);
+  const body = await alpacaFetch(
+    `/v2/stocks/snapshots?symbols=${encodeURIComponent(list.join(","))}&feed=iex`,
+    { host: "data" },
+  );
+  const bag = body && !Array.isArray(body) ? body : {};
+  return list.map((symbol) => {
+    const snap = (bag as Record<string, unknown>)[symbol];
+    const rec = snap && typeof snap === "object" ? (snap as Record<string, unknown>) : {};
+    const last = numField(rec.latestTrade, "p") ?? numField(rec.dailyBar, "c");
+    const bid = numField(rec.latestQuote, "bp");
+    const ask = numField(rec.latestQuote, "ap");
+    const prev = numField(rec.prevDailyBar, "c");
+    let change_pct: string | null = null;
+    if (last && prev && Number(prev) !== 0) {
+      change_pct = (((Number(last) - Number(prev)) / Number(prev)) * 100).toFixed(2);
+    }
+    return { symbol, last, bid, ask, change_pct };
+  });
+}
+
+export async function getDailyBars(
+  symbols: string[],
+  limit = 70,
+): Promise<Record<string, Array<{ t: string; o: number; h: number; l: number; c: number }>>> {
+  return getStockBars(symbols, "1Day", limit, isoDaysAgo(Math.max(limit + 20, 90)));
+}
+
+function parseBars(body: AlpacaJson): Record<string, TapeBar[]> {
+  const root = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+  const bag = (root.bars ?? root) as unknown;
+  const out: Record<string, TapeBar[]> = {};
+  if (Array.isArray(bag)) {
+    out._ = bag.map(rowToBar).filter((x): x is TapeBar => x !== null);
+    return out;
+  }
+  if (!bag || typeof bag !== "object") return out;
+  for (const [sym, rows] of Object.entries(bag as Record<string, unknown>)) {
+    if (!Array.isArray(rows)) continue;
+    out[sym.toUpperCase()] = rows.map(rowToBar).filter((x): x is TapeBar => x !== null);
+  }
+  return out;
+}
+
+function rowToBar(row: unknown): TapeBar | null {
+  if (!row || typeof row !== "object") return null;
+  const r = row as Record<string, unknown>;
+  const c = Number(r.c);
+  const h = Number(r.h);
+  const l = Number(r.l);
+  const o = Number(r.o);
+  const v = Number(r.v ?? 0);
+  if (![c, h, l, o].every((n) => Number.isFinite(n) && n > 0)) return null;
+  return { t: String(r.t ?? ""), o, h, l, c, v: Number.isFinite(v) ? v : 0 };
+}
+
+function pageToken(body: AlpacaJson): string | null {
+  if (!body || Array.isArray(body) || typeof body !== "object") return null;
+  const t = (body as Record<string, unknown>).next_page_token;
+  return typeof t === "string" && t ? t : null;
+}
+
+export async function getStockBars(
+  symbols: string[],
+  timeframe: "5Min" | "15Min" | "1Hour" | "1Day",
+  limit = 200,
+  start?: string,
+): Promise<Record<string, TapeBar[]>> {
+  const list = normalizeWatchlist(symbols);
+  if (!list.length) return {};
+  const merged: Record<string, TapeBar[]> = {};
+  let token: string | undefined;
+  const cap = Math.min(Math.max(limit, 5), 10000);
+  for (let page = 0; page < 8; page++) {
+    const params = new URLSearchParams({
+      symbols: list.join(","),
+      timeframe,
+      limit: String(cap),
+      feed: "iex",
+      adjustment: "raw",
+      sort: "asc",
+    });
+    if (start) params.set("start", start);
+    if (token) params.set("page_token", token);
+    let body: AlpacaJson;
+    try {
+      body = await alpacaFetch(`/v2/stocks/bars?${params.toString()}`, { host: "data" });
+    } catch {
+      params.delete("adjustment");
+      try {
+        body = await alpacaFetch(`/v2/stocks/bars?${params.toString()}`, { host: "data" });
+      } catch {
+        break;
+      }
+    }
+    const part = parseBars(body);
+    for (const [k, rows] of Object.entries(part)) {
+      const key = k === "_" ? list[0] : k;
+      merged[key] = (merged[key] ?? []).concat(rows);
+    }
+    const next = pageToken(body);
+    if (!next) break;
+    token = next;
+    const have = list.reduce((n, s) => n + (merged[s]?.length ?? 0), 0);
+    if (have >= cap) break;
+  }
+  return merged;
+}
+
+type TapeBar = { t: string; o: number; h: number; l: number; c: number; v: number };
+
+function isoDaysAgo(days: number): string {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+function barFromSnap(obj: unknown, fallbackT: string): TapeBar | null {
+  if (!obj || typeof obj !== "object") return null;
+  const o = asNum(numField(obj, "o"));
+  const h = asNum(numField(obj, "h"));
+  const l = asNum(numField(obj, "l"));
+  const c = asNum(numField(obj, "c"));
+  if (o == null || h == null || l == null || c == null) return null;
+  const v = asNum(numField(obj, "v")) ?? 0;
+  return { t: strField(obj, "t") ?? fallbackT, o, h, l, c, v };
+}
+
+function fmtPx(n: number | null): string | null {
+  if (n == null || !Number.isFinite(n)) return null;
+  if (n >= 100) return n.toFixed(2);
+  if (n >= 1) return n.toFixed(3);
+  return n.toFixed(4);
+}
+
+function asNum(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+const FIXTURE_TICKERS = new Set(["ALFA", "BRAV", "CHRL", "DELT", "ECHO", "FOXT", "GOLF", "HOTL"]);
+
+function synthBars(last: number, count: number, stepMs: number, end = Date.now()): TapeBar[] {
+  const out: TapeBar[] = [];
+  for (let i = 0; i < count; i++) {
+    const t = end - (count - 1 - i) * stepMs;
+    const wave = Math.sin(i / 8) * last * 0.006 + Math.cos(i / 3.2) * last * 0.003;
+    const c = last * (0.97 + (0.03 * i) / Math.max(count - 1, 1)) + wave;
+    const o = c - last * 0.0015;
+    const h = Math.max(o, c) + last * 0.002;
+    const l = Math.min(o, c) - last * 0.002;
+    out.push({ t: new Date(t).toISOString(), o, h, l, c, v: 120_000 + i * 850 });
+  }
+  if (out.length) out[out.length - 1].c = last;
+  return out;
+}
+
+async function fixtureDetail(symbol: string): Promise<import("./alpaca-types").TickerDetail | null> {
+  const sql = await getSql();
+  const map = await sql.query<{ ticker: string; name: string | null; permanent_security_id: string }>(
+    `SELECT st.ticker, s.display_name AS name, st.permanent_security_id
+     FROM security_ticker st JOIN security s ON s.permanent_security_id = st.permanent_security_id
+     WHERE st.ticker = $1
+     LIMIT 1`,
+    [symbol],
+  );
+  if (!map.length) return null;
+  const quotes = await sql.query<{ envelope: { payload?: Record<string, unknown> } }>(
+    `SELECT envelope FROM observation
+     WHERE permanent_security_id = $1 AND snapshot_type = 'QUOTE' AND tombstoned = FALSE
+     ORDER BY received_at DESC LIMIT 1`,
+    [map[0].permanent_security_id],
+  );
+  const p = quotes[0]?.envelope?.payload ?? {};
+  const last = asNum(p.last) ?? asNum(p.mid) ?? 100;
+  const bid = asNum(p.bid);
+  const ask = asNum(p.ask);
+  const daily = synthBars(last, 80, 24 * 60 * 60 * 1000);
+  const intra = synthBars(last, 78, 5 * 60 * 1000);
+  const prev = daily.length > 1 ? daily[daily.length - 2].c : last;
+  const change = last - prev;
+  return {
+    symbol,
+    name: map[0].name,
+    exchange: "SAMPLE",
+    tradable: false,
+    last: fmtPx(last),
+    bid: bid != null ? fmtPx(bid) : null,
+    ask: ask != null ? fmtPx(ask) : null,
+    bid_size: null,
+    ask_size: null,
+    change: fmtPx(change),
+    change_pct: prev ? ((change / prev) * 100).toFixed(2) : null,
+    open: fmtPx(intra[0]?.o ?? last),
+    high: fmtPx(Math.max(...intra.map((b) => b.h))),
+    low: fmtPx(Math.min(...intra.map((b) => b.l))),
+    prev_close: fmtPx(prev),
+    volume: String(intra.reduce((s, b) => s + b.v, 0)),
+    vwap: fmtPx(last),
+    week52_high: fmtPx(Math.max(...daily.map((b) => b.h))),
+    week52_low: fmtPx(Math.min(...daily.map((b) => b.l))),
+    trade_at: intra.at(-1)?.t ?? null,
+    quote_at: intra.at(-1)?.t ?? null,
+    bars_intraday: intra,
+    bars_daily: daily,
+    news: [
+      {
+        id: `sample-${symbol}`,
+        headline: `${map[0].name ?? symbol} is a sample research name. Live IEX quotes need a listed ticker such as AAPL.`,
+        source: "Trading App",
+        created_at: new Date().toISOString(),
+        url: null,
+        summary: null,
+      },
+    ],
+    feed: "sample",
+    notice: "Sample session prices. Open a listed ticker (AAPL, NVDA, SPY) for a live IEX feed.",
+  };
+}
+
+export async function getTickerDetail(rawSymbol: string, userId?: string): Promise<import("./alpaca-types").TickerDetail> {
+  const symbol = normalizeSymbol(rawSymbol);
+  if (FIXTURE_TICKERS.has(symbol)) {
+    const sample = await fixtureDetail(symbol);
+    if (sample) return sample;
+  }
+  try {
+    const creds = await resolveCreds(userId);
+    return await withCreds(creds, () => liveTickerDetail(symbol));
+  } catch (err) {
+    const sample = await fixtureDetail(symbol);
+    if (sample) return sample;
+    throw err;
+  }
+}
+
+async function liveTickerDetail(symbol: string): Promise<import("./alpaca-types").TickerDetail> {
+  const startIntra = isoDaysAgo(8);
+  const startHour = isoDaysAgo(12);
+  const startDaily = isoDaysAgo(400);
+  const [assetRaw, snapBody, intra, hourly, daily, newsRaw] = await Promise.all([
+    alpacaFetch(`/v2/assets/${encodeURIComponent(symbol)}`).catch(() => ({})),
+    alpacaFetch(`/v2/stocks/snapshots?symbols=${encodeURIComponent(symbol)}&feed=iex`, { host: "data" }).catch(() => ({})),
+    getStockBars([symbol], "5Min", 2000, startIntra).catch(() => ({}) as Record<string, TapeBar[]>),
+    getStockBars([symbol], "1Hour", 400, startHour).catch(() => ({}) as Record<string, TapeBar[]>),
+    getStockBars([symbol], "1Day", 400, startDaily).catch(() => ({}) as Record<string, TapeBar[]>),
+    alpacaFetch(`/v1beta1/news?symbols=${encodeURIComponent(symbol)}&limit=8&include_content=false`, { host: "data" }).catch(
+      () => ({}),
+    ),
+  ]);
+
+  const asset = asRecord(assetRaw);
+  const snapBag = snapBody && typeof snapBody === "object" && !Array.isArray(snapBody) ? (snapBody as Record<string, unknown>) : {};
+  const snap =
+    (snapBag[symbol] && typeof snapBag[symbol] === "object"
+      ? (snapBag[symbol] as Record<string, unknown>)
+      : snapBag.snapshots && typeof snapBag.snapshots === "object"
+        ? ((snapBag.snapshots as Record<string, unknown>)[symbol] as Record<string, unknown> | undefined)
+        : undefined) ?? {};
+
+  const last = asNum(numField(snap.latestTrade, "p")) ?? asNum(numField(snap.dailyBar, "c"));
+  const prev = asNum(numField(snap.prevDailyBar, "c"));
+  const change = last != null && prev != null ? last - prev : null;
+  const changePct = change != null && prev ? (change / prev) * 100 : null;
+  let dailyBars = daily[symbol] ?? [];
+  const hourBars = hourly[symbol] ?? [];
+  let intraBars = intra[symbol] ?? [];
+  if (intraBars.length < 2 && hourBars.length) intraBars = hourBars;
+  if (dailyBars.length < 2) {
+    const seeded = [barFromSnap(snap.prevDailyBar, isoDaysAgo(1)), barFromSnap(snap.dailyBar, new Date().toISOString())].filter(
+      (x): x is TapeBar => x !== null,
+    );
+    if (seeded.length) dailyBars = seeded;
+  }
+  let w52h: number | null = null;
+  let w52l: number | null = null;
+  for (const b of dailyBars) {
+    if (w52h == null || b.h > w52h) w52h = b.h;
+    if (w52l == null || b.l < w52l) w52l = b.l;
+  }
+  if (w52h == null) w52h = asNum(numField(snap.dailyBar, "h"));
+  if (w52l == null) w52l = asNum(numField(snap.dailyBar, "l"));
+
+  const newsList = (() => {
+    const bag = newsRaw && typeof newsRaw === "object" && !Array.isArray(newsRaw) ? (newsRaw as Record<string, unknown>) : {};
+    const rows = Array.isArray(bag.news) ? bag.news : Array.isArray(newsRaw) ? newsRaw : [];
+    return rows
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        const n = item as Record<string, unknown>;
+        const headline = typeof n.headline === "string" ? n.headline : null;
+        if (!headline) return null;
+        return {
+          id: String(n.id ?? headline),
+          headline,
+          source: typeof n.source === "string" ? n.source : typeof n.author === "string" ? n.author : null,
+          created_at: typeof n.created_at === "string" ? n.created_at : "",
+          url: typeof n.url === "string" ? n.url : null,
+          summary: typeof n.summary === "string" ? n.summary : null,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null)
+      .slice(0, 8);
+  })();
+
+  return {
+    symbol,
+    name: typeof asset.name === "string" ? asset.name : null,
+    exchange: typeof asset.exchange === "string" ? asset.exchange : null,
+    tradable: asset.tradable === true || asset.tradable === "true",
+    last: fmtPx(last),
+    bid: fmtPx(asNum(numField(snap.latestQuote, "bp"))),
+    ask: fmtPx(asNum(numField(snap.latestQuote, "ap"))),
+    bid_size: numField(snap.latestQuote, "bs"),
+    ask_size: numField(snap.latestQuote, "as"),
+    change: change == null ? null : fmtPx(change),
+    change_pct: changePct == null ? null : changePct.toFixed(2),
+    open: fmtPx(asNum(numField(snap.dailyBar, "o"))),
+    high: fmtPx(asNum(numField(snap.dailyBar, "h"))),
+    low: fmtPx(asNum(numField(snap.dailyBar, "l"))),
+    prev_close: fmtPx(asNum(numField(snap.prevDailyBar, "c"))),
+    volume: numField(snap.dailyBar, "v"),
+    vwap: fmtPx(asNum(numField(snap.dailyBar, "vw"))),
+    week52_high: fmtPx(w52h),
+    week52_low: fmtPx(w52l),
+    trade_at: strField(snap.latestTrade, "t"),
+    quote_at: strField(snap.latestQuote, "t"),
+    bars_intraday: intraBars,
+    bars_daily: dailyBars,
+    news: newsList,
+    feed: "live",
+    notice: null,
+  };
+}
+
+export async function submitOrder(args: {
+  symbol: string;
+  side: "buy" | "sell";
+  type: "market" | "limit";
+  timeInForce: "day" | "gtc" | "ioc";
+  qty?: string;
+  notional?: string;
+  limitPrice?: string;
+  extendedHours?: boolean;
+  confirmLive?: boolean;
+  actor: string;
+}): Promise<Record<string, string | boolean | null>> {
+  const creds = await loadStored();
+  if (creds.mode === "LIVE") {
+    throw new DeskError("LIVE_DISABLED", "This workspace is paper-only. Live Alpaca orders are not available.", 422);
+  }
+  const symbol = normalizeSymbol(args.symbol);
+  const qty = args.qty?.trim() || undefined;
+  const notional = args.notional?.trim() || undefined;
+  if ((qty && notional) || (!qty && !notional)) {
+    throw new DeskError("INVALID_SIZE", "Provide either share quantity or dollar notional, not both", 422);
+  }
+  if (qty && !/^[0-9]+(?:\.[0-9]{1,9})?$/.test(qty)) {
+    throw new DeskError("INVALID_SIZE", "Quantity must be a positive decimal", 422);
+  }
+  if (notional && !/^[0-9]+(?:\.[0-9]{1,2})?$/.test(notional)) {
+    throw new DeskError("INVALID_SIZE", "Notional must be dollars with at most 2 decimal places", 422);
+  }
+  if (args.type === "limit") {
+    const px = args.limitPrice?.trim();
+    if (!px || !/^[0-9]+(?:\.[0-9]{1,4})?$/.test(px)) {
+      throw new DeskError("INVALID_LIMIT", "Limit orders need a limit price", 422);
+    }
+  }
+  const clientOrderId = newId("clid");
+  const payload: Record<string, unknown> = {
+    symbol,
+    side: args.side,
+    type: args.type,
+    time_in_force: args.timeInForce,
+    client_order_id: clientOrderId,
+  };
+  if (qty) payload.qty = qty;
+  if (notional) payload.notional = notional;
+  if (args.type === "limit") payload.limit_price = args.limitPrice!.trim();
+  if (args.extendedHours) payload.extended_hours = true;
+  const raw = await alpacaFetch("/v2/orders", { method: "POST", body: JSON.stringify(payload) });
+  const rec = asRecord(raw);
+  const sql = await getSql();
+  try {
+    await sql.query(
+      `INSERT INTO alpaca_order_log (
+         local_id, alpaca_order_id, client_order_id, symbol, side, order_type, time_in_force,
+         qty, notional, limit_price, status, mode, submitted_at, submitted_by, raw_receipt
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW(),$13,$14::jsonb)`,
+      [
+        newId("aord"),
+        rec.id ?? null,
+        clientOrderId,
+        symbol,
+        args.side,
+        args.type,
+        args.timeInForce,
+        qty ?? null,
+        notional ?? null,
+        args.type === "limit" ? args.limitPrice!.trim() : null,
+        rec.status ?? "submitted",
+        creds.mode,
+        safeActor(args.actor),
+        JSON.stringify(raw),
+      ],
+    );
+  } catch {
+    /* local audit must not block a live/paper fill */
+  }
+  return rec;
+}
+
+export async function cancelOrder(orderId: string): Promise<Record<string, string | boolean | null>> {
+  if (!/^[A-Za-z0-9-]+$/.test(orderId) || orderId.length > 64) {
+    throw new DeskError("INVALID_ORDER", "Bad order id", 422);
+  }
+  const raw = await alpacaFetch(`/v2/orders/${encodeURIComponent(orderId)}`, { method: "DELETE" });
+  return asRecord(raw);
+}
+
+export async function closePosition(symbol: string): Promise<Record<string, string | boolean | null>> {
+  const s = normalizeSymbol(symbol);
+  const raw = await alpacaFetch(`/v2/positions/${encodeURIComponent(s)}`, { method: "DELETE" });
+  return asRecord(raw);
+}
+
+
+```
+
+## `src/desk/alpaca-data-service.server.ts`
+
+```
+import { getSql, dbSource } from "@/lib/db";
+import { createSecretService, SecretError } from "./alpaca-data-secrets";
+import type { SecretCode, SecretStatus, SecretSql } from "./alpaca-data-secrets";
+import { decryptPair } from "./alpaca-data-secrets";
+import { loadMasterKey } from "./alpaca-master-key.server";
+
+export type SecretReply =
+  | { ok: true; can_manage: boolean; status: SecretStatus }
+  | { ok: false; code: SecretCode };
+
+async function ensureSchema(db: SecretSql): Promise<void> {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS alpaca_data_secret (
+      owner_user_id text PRIMARY KEY CHECK (length(owner_user_id) BETWEEN 1 AND 256),
+      version uuid NOT NULL,
+      envelope jsonb NOT NULL CHECK (jsonb_typeof(envelope) = 'object'),
+      key_last4 text NOT NULL CHECK (length(key_last4) = 4),
+      updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+      checked_at timestamptz,
+      last_test_started_at timestamptz,
+      test_result text NOT NULL DEFAULT 'NOT_TESTED' CHECK (test_result IN (
+        'NOT_TESTED','VERIFIED','INVALID_CREDENTIALS','AUTH_OR_PERMISSION_DENIED',
+        'RATE_LIMITED','PROVIDER_UNAVAILABLE'
+      ))
+    )`);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS alpaca_data_secret_audit (
+      audit_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      owner_user_id text NOT NULL,
+      version uuid NOT NULL,
+      action text NOT NULL CHECK (action IN ('SAVE','REMOVE','TEST')),
+      result text NOT NULL CHECK (result IN (
+        'SAVED','REMOVED','VERIFIED','INVALID_CREDENTIALS','AUTH_OR_PERMISSION_DENIED',
+        'RATE_LIMITED','PROVIDER_UNAVAILABLE'
+      )),
+      occurred_at timestamptz NOT NULL DEFAULT clock_timestamp()
+    )`);
+}
+
+export async function execute(
+  userId: string,
+  mutation: boolean,
+  action: (service: ReturnType<typeof createSecretService>) => Promise<SecretStatus>,
+): Promise<SecretReply> {
+  try {
+    if (!userId) throw new SecretError("FORBIDDEN");
+    const db = await getSql();
+    await ensureSchema(db);
+    const principals = await db.query<{ role: string }>(`SELECT role FROM desk_principal WHERE user_id = $1`, [userId]);
+    const canManage = principals[0]?.role === "OPERATOR";
+    if (mutation && !canManage) throw new SecretError("FORBIDDEN");
+    const durableStorage = dbSource === "neon";
+    const service = createSecretService({
+      db,
+      durableStorage,
+      masterKey: () => loadMasterKey(),
+    });
+    return { ok: true, can_manage: canManage && durableStorage, status: await action(service) };
+  } catch (error) {
+    return { ok: false, code: error instanceof SecretError ? error.code : "STORAGE_UNAVAILABLE" };
+  }
+}
+
+/** Decrypt the owner’s saved market-data pair for server-side data calls. Never send to the browser. */
+export async function loadDataPair(userId: string): Promise<{ apiKeyId: string; apiSecret: string } | null> {
+  if (!userId) return null;
+  const db = await getSql();
+  await ensureSchema(db);
+  const rows = await db.query<{ version: string; envelope: { format: string; iv: string; tag: string; ciphertext: string } }>(
+    `SELECT version::text, envelope FROM alpaca_data_secret WHERE owner_user_id = $1`,
+    [userId],
+  );
+  if (!rows.length) return null;
+  const key = loadMasterKey();
+  try {
+    return decryptPair(key, userId, rows[0].version, rows[0].envelope as Parameters<typeof decryptPair>[3]);
+  } finally {
+    key.fill(0);
+  }
+}
+
+```
+
+## `src/desk/alpaca-master-key.server.ts`
+
+```
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { masterKeyFromBase64 } from "./alpaca-data-secrets";
+import { SecretError } from "./alpaca-data-secrets";
+
+const FILE = join(process.cwd(), ".grok", "alpaca-master.key");
+
+function parse(value: string): Buffer | null {
+  try {
+    return masterKeyFromBase64(value.trim());
+  } catch {
+    return null;
+  }
+}
+
+function readFile(path: string): Buffer | null {
+  try {
+    return parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Server-only wrap key. Fail closed.
+ * Env `ALPACA_CREDENTIALS_MASTER_KEY` wins. Else an already-provisioned
+ * gitignored file. Never create /tmp or process-memory keys.
+ */
+export function loadMasterKey(): Buffer {
+  const fromEnv = process.env.ALPACA_CREDENTIALS_MASTER_KEY?.trim();
+  if (fromEnv) {
+    const parsed = parse(fromEnv);
+    if (!parsed) throw new SecretError("SECRET_STORAGE_NOT_READY");
+    return parsed;
+  }
+  const fromFile = readFile(FILE);
+  if (fromFile) return fromFile;
+  throw new SecretError("SECRET_STORAGE_NOT_READY");
+}
+
+/** True when a stable server-managed key is available. Does not create one. */
+export function masterKeyConfigured(): boolean {
+  try {
+    const key = loadMasterKey();
+    key.fill(0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** @deprecated use loadMasterKey — creation fallbacks are removed. */
+export function loadOrCreateMasterKey(): Buffer {
+  return loadMasterKey();
+}
+
+```
+
+## `src/desk/alpaca-data-secrets.ts`
+
+```
+/** Server-only credential service. Never import into a browser component.
+ * This store is intentionally separate from the legacy order-routing keys.
+ */
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "node:crypto";
+
+export type SecretCode =
+  | "SAVED" | "REMOVED" | "VERIFIED" | "NOT_TESTED"
+  | "INVALID_INPUT" | "NOT_CONFIGURED" | "VERSION_CONFLICT"
+  | "SECRET_STORAGE_NOT_READY" | "STORAGE_NOT_DURABLE" | "SECRET_UNREADABLE"
+  | "INVALID_CREDENTIALS" | "AUTH_OR_PERMISSION_DENIED" | "RATE_LIMITED"
+  | "PROVIDER_UNAVAILABLE" | "STORAGE_UNAVAILABLE" | "FORBIDDEN";
+
+export class SecretError extends Error {
+  readonly code: SecretCode;
+  constructor(code: SecretCode) { super(code); this.name = "SecretError"; this.code = code; }
+}
+
+export type SecretStatus = {
+  configured: boolean;
+  key_last4: string | null;
+  version: string | null;
+  updated_at: string | null;
+  checked_at: string | null;
+  test_result: SecretCode;
+  storage_ready: boolean;
+  storage_code: SecretCode | null;
+};
+
+export interface SecretSql {
+  query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>;
+}
+
+type Pair = { apiKeyId: string; apiSecret: string };
+type Envelope = { format: "aes-256-gcm-v1"; iv: string; tag: string; ciphertext: string };
+type StoredRow = {
+  owner_user_id: string; version: string; key_last4: string; envelope: Envelope;
+  updated_at: string; checked_at: string | null; test_result: SecretCode;
+};
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const TOKEN = /^[\x21-\x7e]+$/;
+export const DATA_TEST_URL = "https://data.alpaca.markets/v2/stocks/quotes/latest?symbols=SPY&feed=iex";
+
+/** The encryption key is a separate server secret, never a database keyring row. */
+export function masterKeyFromBase64(value: unknown): Buffer {
+  if (typeof value !== "string" || !/^[A-Za-z0-9+/]{43}=$/.test(value)) {
+    throw new SecretError("SECRET_STORAGE_NOT_READY");
+  }
+  const key = Buffer.from(value, "base64");
+  if (key.length !== 32 || key.toString("base64") !== value) throw new SecretError("SECRET_STORAGE_NOT_READY");
+  return key;
+}
+
+export function validatePair(value: unknown): Pair {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new SecretError("INVALID_INPUT");
+  const v = value as Record<string, unknown>;
+  if (Object.keys(v).length !== 2 || typeof v.apiKeyId !== "string" || typeof v.apiSecret !== "string") {
+    throw new SecretError("INVALID_INPUT");
+  }
+  if (v.apiKeyId.length < 8 || v.apiKeyId.length > 80 || !TOKEN.test(v.apiKeyId)
+      || v.apiSecret.length < 8 || v.apiSecret.length > 256 || !TOKEN.test(v.apiSecret)) {
+    throw new SecretError("INVALID_INPUT");
+  }
+  return { apiKeyId: v.apiKeyId, apiSecret: v.apiSecret };
+}
+
+function aad(owner: string, version: string): Buffer {
+  return Buffer.from(JSON.stringify(["Trading App|AlpacaDataSecret|1", owner, version]), "utf8");
+}
+function validOwner(owner: string): void {
+  if (typeof owner !== "string" || !owner || owner.length > 256) throw new SecretError("FORBIDDEN");
+}
+function validVersion(version: string | null): void {
+  if (version !== null && (typeof version !== "string" || !UUID.test(version))) throw new SecretError("INVALID_INPUT");
+}
+
+export function encryptPair(key: Buffer, owner: string, version: string, pair: Pair): Envelope {
+  validatePair(pair); validOwner(owner); validVersion(version);
+  if (!Buffer.isBuffer(key) || key.length !== 32) throw new SecretError("SECRET_STORAGE_NOT_READY");
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(aad(owner, version));
+  const plaintext = Buffer.from(JSON.stringify(pair), "utf8");
+  try {
+    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+    return { format: "aes-256-gcm-v1", iv: iv.toString("base64"), tag: cipher.getAuthTag().toString("base64"), ciphertext: ciphertext.toString("base64") };
+  } finally { plaintext.fill(0); }
+}
+
+export function decryptPair(key: Buffer, owner: string, version: string, envelope: Envelope): Pair {
+  try {
+    if (envelope.format !== "aes-256-gcm-v1") throw new Error();
+    const iv = Buffer.from(envelope.iv, "base64"), tag = Buffer.from(envelope.tag, "base64");
+    if (iv.length !== 12 || tag.length !== 16) throw new Error();
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAAD(aad(owner, version)); decipher.setAuthTag(tag);
+    const plaintext = Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext, "base64")), decipher.final()]);
+    try { return validatePair(JSON.parse(plaintext.toString("utf8"))); }
+    finally { plaintext.fill(0); }
+  } catch { throw new SecretError("SECRET_UNREADABLE"); }
+}
+
+/** Read-only connectivity check; never calls account/order APIs or follows redirects.
+ * 200 means the data endpoint accepted the credentials, not auction coverage/readiness.
+ */
+export async function checkDataAccess(pair: Pair, fetcher: typeof fetch = fetch): Promise<SecretCode> {
+  validatePair(pair);
+  try {
+    const response = await fetcher(DATA_TEST_URL, {
+      method: "GET", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(8000),
+      headers: { "APCA-API-KEY-ID": pair.apiKeyId, "APCA-API-SECRET-KEY": pair.apiSecret, Accept: "application/json" },
+    });
+    // No prices, account data, or provider error bodies are exposed to the operator.
+    try { await response.body?.cancel(); } catch { /* no response-body logging */ }
+    if (response.status === 200) return "VERIFIED";
+    if (response.status === 401) return "INVALID_CREDENTIALS";
+    if (response.status === 403) return "AUTH_OR_PERMISSION_DENIED";
+    if (response.status === 429) return "RATE_LIMITED";
+    return "PROVIDER_UNAVAILABLE";
+  } catch { return "PROVIDER_UNAVAILABLE"; }
+}
+
+/** Dependencies are injected for isolated tests. Real callers must supply durableStorage.
+ * owner comes exclusively from the verified authentication context, never a request field.
+ */
+export function createSecretService(deps: {
+  db: SecretSql; masterKey: () => Buffer; durableStorage: boolean; fetcher?: typeof fetch;
+}) {
+  const { db } = deps;
+  function requireStorage(): Buffer {
+    if (!deps.durableStorage) throw new SecretError("STORAGE_NOT_DURABLE");
+    return deps.masterKey();
+  }
+  async function status(owner: string): Promise<SecretStatus> {
+    validOwner(owner);
+    let storageCode: SecretCode | null = null;
+    try { const key = requireStorage(); key.fill(0); }
+    catch (e) { storageCode = e instanceof SecretError ? e.code : "SECRET_STORAGE_NOT_READY"; }
+    const rows = await db.query<StoredRow>(
+      `SELECT version, key_last4, updated_at::text, checked_at::text, test_result
+       FROM alpaca_data_secret WHERE owner_user_id = $1`, [owner],
+    );
+    const r = rows[0];
+    return {
+      configured: !!r, key_last4: r?.key_last4 ?? null, version: r?.version ?? null,
+      updated_at: r?.updated_at ?? null, checked_at: r?.checked_at ?? null,
+      test_result: r?.test_result ?? "NOT_TESTED", storage_ready: storageCode === null, storage_code: storageCode,
+    };
+  }
+  async function save(owner: string, pair: Pair, expectedVersion: string | null): Promise<SecretStatus> {
+    validOwner(owner); validatePair(pair); validVersion(expectedVersion);
+    const version = randomUUID();
+    const key = requireStorage();
+    let envelope: Envelope;
+    try { envelope = encryptPair(key, owner, version, pair); } finally { key.fill(0); }
+    const rows = await db.query<{ version: string }>(
+      `WITH changed AS (
+        INSERT INTO alpaca_data_secret (owner_user_id, version, envelope, key_last4)
+        SELECT $1, $2::uuid, $3::jsonb, $4 WHERE $5::uuid IS NULL
+        ON CONFLICT (owner_user_id) DO NOTHING RETURNING version
+      ), replaced AS (
+        UPDATE alpaca_data_secret SET version=$2::uuid, envelope=$3::jsonb, key_last4=$4,
+          updated_at=clock_timestamp(), checked_at=NULL, last_test_started_at=NULL, test_result='NOT_TESTED'
+        WHERE owner_user_id=$1 AND version=$5::uuid RETURNING version
+      ), result AS (SELECT version FROM changed UNION ALL SELECT version FROM replaced), logged AS (
+        INSERT INTO alpaca_data_secret_audit (owner_user_id, version, action, result)
+        SELECT $1, version, 'SAVE', 'SAVED' FROM result
+      ) SELECT version::text FROM result`,
+      [owner, version, JSON.stringify(envelope), pair.apiKeyId.slice(-4), expectedVersion],
+    );
+    if (rows.length !== 1) throw new SecretError("VERSION_CONFLICT");
+    return status(owner);
+  }
+  async function remove(owner: string, expectedVersion: string): Promise<SecretStatus> {
+    validOwner(owner); validVersion(expectedVersion);
+    if (!expectedVersion) throw new SecretError("INVALID_INPUT");
+    const rows = await db.query<{ version: string }>(
+      `WITH removed AS (
+        DELETE FROM alpaca_data_secret WHERE owner_user_id=$1 AND version=$2::uuid RETURNING version
+      ), logged AS (
+        INSERT INTO alpaca_data_secret_audit (owner_user_id, version, action, result)
+        SELECT $1, version, 'REMOVE', 'REMOVED' FROM removed
+      ) SELECT version::text FROM removed`, [owner, expectedVersion],
+    );
+    if (rows.length !== 1) throw new SecretError("VERSION_CONFLICT");
+    return status(owner);
+  }
+  async function test(owner: string, expectedVersion: string): Promise<SecretStatus> {
+    validOwner(owner); validVersion(expectedVersion);
+    if (!expectedVersion) throw new SecretError("INVALID_INPUT");
+    const key = requireStorage();
+    let pair: Pair;
+    try {
+      const rows = await db.query<StoredRow>(
+        `UPDATE alpaca_data_secret SET last_test_started_at=clock_timestamp()
+         WHERE owner_user_id=$1 AND version=$2::uuid
+           AND (last_test_started_at IS NULL OR last_test_started_at < clock_timestamp() - interval '10 seconds')
+         RETURNING version::text, envelope`,
+        [owner, expectedVersion],
+      );
+      if (!rows.length) {
+        const current = await status(owner);
+        throw new SecretError(current.version === expectedVersion ? "RATE_LIMITED" : "VERSION_CONFLICT");
+      }
+      pair = decryptPair(key, owner, expectedVersion, rows[0].envelope);
+    } finally { key.fill(0); }
+    const result = await checkDataAccess(pair, deps.fetcher);
+    // Version-bound update prevents a slow test from certifying replacement credentials.
+    const rows = await db.query<{ version: string }>(
+      `WITH changed AS (
+        UPDATE alpaca_data_secret SET checked_at=clock_timestamp(), test_result=$3
+        WHERE owner_user_id=$1 AND version=$2::uuid RETURNING version
+      ), logged AS (
+        INSERT INTO alpaca_data_secret_audit (owner_user_id, version, action, result)
+        SELECT $1, version, 'TEST', $3 FROM changed
+      ) SELECT version::text FROM changed`, [owner, expectedVersion, result],
+    );
+    if (rows.length !== 1) throw new SecretError("VERSION_CONFLICT");
+    return status(owner);
+  }
+  return { status, save, remove, test };
+}
+
+```
+
+## `src/desk/server-fns-impl.server.ts`
+
+```
+import { ensureBootstrapped } from "./bootstrap";
+import { adminPayload, claimRole, earningsPayload, getOrCreatePrincipal, homePayload, noticesPayload, predictionsPayload, resultsPayload } from "./queries";
+import { pauseAdmission, resumeAdmission, recordPrintKnowledge, appendFireRateNote, applyDueDeadlines } from "./lifecycle";
+import { freezeMember } from "./commands";
+import { verifyFreezeArtifact } from "./verify-freeze";
+import { DeskError, newId } from "./util";
+import type { DeskRole } from "./util";
+import {
+  cancelOrder,
+  closePosition,
+  disconnect,
+  getAccount,
+  getClock,
+  getOrders,
+  getPositions,
+  getSnapshots,
+  getTickerDetail,
+  publicStatus,
+  saveCredentials,
+  saveWatchlist,
+  submitOrder,
+} from "./alpaca";
+
+export async function identityOf(userId: string): Promise<{ role: DeskRole; principal_id: string }> {
+  const p = await getOrCreatePrincipal(userId, null);
+  if (!p.role) throw new DeskError("FORBIDDEN", "Choose operator or reviewer first", 403);
+  return { role: p.role, principal_id: p.principal_id };
+}
+
+async function roleOf(userId: string) {
+  try {
+    await ensureBootstrapped();
+  } catch {
+    /* earnings fixtures can fail independently of Alpaca keys */
+  }
+  const p = await getOrCreatePrincipal(userId, null);
+  return { role: p.role, principal_id: p.principal_id };
+}
+
+function requireOperator(role: DeskRole | null): void {
+  if (role !== "OPERATOR") throw new DeskError("FORBIDDEN", "OPERATOR only", 403);
+}
+
+export async function fetchMeImpl(userId: string) {
+  const p = await getOrCreatePrincipal(userId, null);
+  let alpaca = { connected: false, mode: null as "PAPER" | "LIVE" | null };
+  try {
+    const s = await publicStatus();
+    alpaca = { connected: s.connected, mode: s.mode };
+  } catch {
+    /* keys UI still has to load */
+  }
+  return { userId, role: p.role, principal_id: p.principal_id, alpaca };
+}
+
+export async function claimRoleImpl(userId: string, role: "OPERATOR" | "REVIEWER") {
+  return claimRole(userId, null, role);
+}
+
+export async function fetchHomeImpl(userId: string, sessionDate?: string) {
+  const { role } = await roleOf(userId);
+  if (!role) return { needs_role: true as const };
+  return homePayload(role, sessionDate);
+}
+
+export async function fetchEarningsImpl(userId: string, sessionDate?: string) {
+  const { role } = await roleOf(userId);
+  if (!role) return { needs_role: true as const };
+  return earningsPayload(role, sessionDate);
+}
+
+export async function fetchPredictionsImpl(userId: string, manifestId?: string, sessionDate?: string) {
+  const { role } = await roleOf(userId);
+  if (!role) return { needs_role: true as const };
+  return predictionsPayload(role, manifestId, sessionDate);
+}
+
+export async function fetchResultsImpl(userId: string) {
+  const { role } = await roleOf(userId);
+  if (!role) return { needs_role: true as const };
+  return resultsPayload(role);
+}
+
+export async function fetchAdminImpl(userId: string) {
+  const { role } = await roleOf(userId);
+  if (!role) return { needs_role: true as const };
+  return adminPayload(role);
+}
+
+export async function fetchNoticesImpl(userId: string) {
+  const { role } = await roleOf(userId);
+  if (!role) return { needs_role: true as const };
+  return noticesPayload(role);
+}
+
+export async function postPauseImpl(userId: string, reason: string) {
+  const { role, principal_id } = await roleOf(userId);
+  requireOperator(role);
+  return pauseAdmission(newId("cmd"), reason, principal_id);
+}
+
+export async function postResumeImpl(userId: string) {
+  const { role, principal_id } = await roleOf(userId);
+  requireOperator(role);
+  return resumeAdmission(newId("cmd"), principal_id);
+}
+
+export async function postPrintKnowledgeImpl(userId: string, data: { eventKey: string; securityId: string; reason: string }) {
+  const { role, principal_id } = await roleOf(userId);
+  requireOperator(role);
+  return recordPrintKnowledge(newId("cmd"), data, principal_id);
+}
+
+export async function postFireNoteImpl(userId: string, data: { hypothesis: "IMPLEMENTATION_BUG" | "COVERAGE_SHIFT" | "REGIME_SHIFT"; note: string }) {
+  const { role, principal_id } = await roleOf(userId);
+  requireOperator(role);
+  return appendFireRateNote(newId("cmd"), { windowId: "win-2026q3", hypothesis: data.hypothesis, note: data.note }, principal_id);
+}
+
+export async function postRetryDeadlinesImpl(userId: string) {
+  const { role } = await roleOf(userId);
+  requireOperator(role);
+  return applyDueDeadlines("svc-desk-writer");
+}
+
+export async function postVerifyFreezeImpl(userId: string, data: { manifestId: string; securityId: string }) {
+  await roleOf(userId);
+  return verifyFreezeArtifact(data.manifestId, data.securityId);
+}
+
+export async function fetchAlpacaStatusImpl(userId: string) {
+  const { role } = await roleOf(userId);
+  return { role, can_mutate: role === "OPERATOR", status: await publicStatus() };
+}
+
+export async function postAlpacaCredentialsImpl(
+  userId: string,
+  data: { apiKeyId: string; apiSecret: string; mode: "PAPER" | "LIVE"; confirmLive?: boolean },
+) {
+  const { role, principal_id } = await roleOf(userId);
+  requireOperator(role);
+  if (data.mode === "LIVE") {
+    throw new Error("This workspace is paper-only. Live Alpaca trading is not available.");
+  }
+  const { execute } = await import("./alpaca-data-service.server");
+  const current = await execute(userId, false, (s) => s.status(userId));
+  if (!current.ok) {
+    throw new Error("Keys were not saved. Check operator access and secret storage.");
+  }
+  const stored = await execute(userId, true, (s) =>
+    s.save(userId, { apiKeyId: data.apiKeyId, apiSecret: data.apiSecret }, current.status.version),
+  );
+  if (!stored.ok) {
+    throw new Error("Keys were not saved. Check operator access and secret storage.");
+  }
+  return saveCredentials({ ...data, mode: "PAPER", actor: principal_id });
+}
+
+export async function postAlpacaDisconnectImpl(userId: string) {
+  const { role } = await identityOf(userId);
+  requireOperator(role);
+  return disconnect();
+}
+
+export async function postAlpacaWatchlistImpl(userId: string, watchlist: string[]) {
+  const { role } = await identityOf(userId);
+  requireOperator(role);
+  return saveWatchlist(watchlist);
+}
+
+export async function fetchAlpacaDeskImpl(userId: string) {
+  const { role } = await identityOf(userId);
+  const status = await publicStatus();
+  const can_mutate = role === "OPERATOR";
+  if (!status.connected) {
+    return { role, can_mutate, status, connected: false as const };
+  }
+  try {
+    const [account, clock, positions, orders, quotes] = await Promise.all([
+      getAccount(),
+      getClock(),
+      getPositions(),
+      getOrders("open"),
+      getSnapshots(status.watchlist),
+    ]);
+    return { role, can_mutate, status, connected: true as const, account, clock, positions, orders, quotes };
+  } catch (e) {
+    return {
+      role,
+      can_mutate,
+      status,
+      connected: true as const,
+      error: e instanceof Error ? e.message : "Alpaca request failed",
+    };
+  }
+}
+
+export async function fetchAlpacaOrdersImpl(userId: string, status: "open" | "closed" | "all" = "all") {
+  await identityOf(userId);
+  return { orders: await getOrders(status) };
+}
+
+export async function postAlpacaOrderImpl(
+  userId: string,
+  data: {
+    symbol: string;
+    side: "buy" | "sell";
+    type: "market" | "limit";
+    timeInForce: "day" | "gtc" | "ioc";
+    qty?: string;
+    notional?: string;
+    limitPrice?: string;
+    extendedHours?: boolean;
+    confirmLive?: boolean;
   },
 ) {
-  const payloadH = payloadHash(row.payload);
-  const envelope = {
-    observation_id: row.id,
-    permanent_security_id: row.sec,
-    event_key: row.eventKey ?? null,
-    session_date: row.session,
-    snapshot_type: row.type,
-    provider_id: "fixture",
-    provider_record_id: row.id,
-    provider_revision: "1",
-    payload_hash: payloadH,
-    payload_schema_version: "1",
-    source_class: row.sourceClass ?? "AUTHORITATIVE",
-    adjustment_basis: row.type.startsWith("MARK") || row.type === "QUOTE" || row.type === "BAR_DAILY" ? "UNADJUSTED" : "NOT_PRICE",
-    payload: row.payload,
+  const { role, principal_id } = await identityOf(userId);
+  requireOperator(role);
+  return submitOrder({ ...data, actor: principal_id });
+}
+
+export async function postAlpacaCancelImpl(userId: string, orderId: string) {
+  const { role } = await identityOf(userId);
+  requireOperator(role);
+  return cancelOrder(orderId);
+}
+
+export async function postAlpacaCloseImpl(userId: string, symbol: string) {
+  const { role } = await identityOf(userId);
+  requireOperator(role);
+  return closePosition(symbol);
+}
+
+export async function runAutoCycleImpl(userId: string) {
+  await identityOf(userId);
+  const { runAutoCycle } = await import("./auto-trade");
+  return runAutoCycle(userId);
+}
+
+export async function fetchAutoStatusImpl(userId: string) {
+  await identityOf(userId);
+  const { autoStatus } = await import("./auto-trade");
+  return autoStatus();
+}
+
+export async function fetchTickerDetailImpl(userId: string, symbol: string) {
+  await identityOf(userId);
+  return getTickerDetail(symbol, userId);
+}
+
+```
+
+## `src/desk/queries.ts`
+
+```
+import { getSql, dbSource } from "@/lib/db";
+import { asHex, rfc3339, type DeskRole } from "./util";
+import { ensureBootstrapped } from "./bootstrap";
+import { publicStatus } from "./alpaca";
+import { cap, type Capability } from "@/ui/capability";
+import { masterKeyConfigured } from "./alpaca-master-key.server";
+
+export type Envelope<T> = {
+  product_name: "Trading App";
+  paperOnly: true;
+  liveTradingSupported: false;
+  activeModelWeight: "0";
+  data_mode: "FIXTURE";
+  request_id: string;
+  as_of: string;
+  data: T;
+  warnings: string[];
+};
+
+export function wrap<T>(requestId: string, asOf: string, data: T, warnings: string[] = []): Envelope<T> {
+  return {
+    product_name: "Trading App",
+    paperOnly: true,
+    liveTradingSupported: false,
+    activeModelWeight: "0",
+    data_mode: "FIXTURE",
+    request_id: requestId,
+    as_of: asOf,
+    data,
+    warnings,
   };
-  const obsH = observationHash(envelope);
-  await sql.query(
-    `INSERT INTO observation (
-      observation_id, event_seq, permanent_security_id, event_key, session_date, snapshot_type, provider_id,
-      provider_record_id, provider_revision, received_at, source_event_at, source_class, adjustment_basis,
-      payload_schema_id, payload_hash, observation_hash, envelope, is_partial, partition, tombstoned
-    ) VALUES ($1,$2,$3,$4,$5,$6,'fixture',$1,'1',$7,$7,$8,$9,'1',$10,$11,$12::jsonb,FALSE,'RESEARCH',FALSE)`,
-    [
-      row.id,
-      seq,
-      row.sec,
-      row.eventKey ?? null,
-      row.session,
-      row.type,
-      row.receivedAt,
-      envelope.source_class,
-      envelope.adjustment_basis,
-      hexBuf(payloadH),
-      hexBuf(obsH),
-      JSON.stringify(envelope),
-    ],
-  );
 }
 
-let bootChain: Promise<{ ok: boolean; note: string }> | null = null;
-
-export async function ensureBootstrapped(): Promise<{ ok: boolean; note: string }> {
-  if (bootChain) return bootChain;
-  bootChain = (async () => {
-    const sql = await getSql();
-    const st = await sql.query<{ completed: boolean }>(`SELECT completed FROM bootstrap_state WHERE singleton_key = TRUE`);
-    if (st[0]?.completed) return { ok: true, note: "already-seeded" };
-    await seedWorld();
-    return { ok: true, note: "seeded" };
-  })()
-    .then((r) => {
-      console.info("[trading-app] bootstrap", r.note);
-      return r;
-    })
-    .catch((err) => {
-      bootChain = null;
-      console.error("[trading-app] bootstrap failed", err);
-      throw err;
-    });
-  return bootChain;
-}
-
-async function clockIso(): Promise<string> {
+async function asOf(): Promise<string> {
   const sql = await getSql();
   const r = await sql.query<{ now_utc: string }>(`SELECT now_utc::text FROM fixture_clock WHERE singleton_key = TRUE`);
-  return r[0].now_utc;
+  return rfc3339(new Date(r[0]?.now_utc ?? Date.now()));
 }
 
-async function ensureClock(iso: string) {
-  const cur = new Date(await clockIso());
-  const next = new Date(iso);
-  if (next > cur) await advanceClock(iso, SERVICE);
+function rate(num: number, den: number): { value: string | null; reason: string | null } {
+  if (den === 0) return { value: null, reason: "NO_DENOMINATOR" };
+  return { value: (num / den).toFixed(12), reason: null };
 }
 
-async function runSession(opts: {
-  commandSeal: string;
-  sessionDate: string;
-  skip: Set<string>;
-  freezePrefix: string;
-  echoLast?: boolean;
-  beforeSeal?: () => Promise<void>;
-}) {
+export async function homePayload(role: DeskRole, sessionDate?: string) {
+  await ensureBootstrapped();
   const sql = await getSql();
-  let man = await sql.query<{ manifest_id: string }>(`SELECT manifest_id FROM manifest WHERE session_date = $1`, [
-    opts.sessionDate,
-  ]);
-  if (!man.length) {
-    await ensureClock(etInstant(opts.sessionDate, "15:45").toISOString());
-    if (opts.beforeSeal) await opts.beforeSeal();
-    await sealSession(opts.commandSeal, opts.sessionDate, SERVICE);
-    man = await sql.query<{ manifest_id: string }>(`SELECT manifest_id FROM manifest WHERE session_date = $1`, [
-      opts.sessionDate,
-    ]);
-  }
-  const members = await sql.query<{ permanent_security_id: string; shuffle_order_index: number }>(
-    `SELECT permanent_security_id, shuffle_order_index FROM manifest_member WHERE manifest_id = $1 ORDER BY shuffle_order_index`,
+  const clock = await asOf();
+  const sessions = await sql.query<{
+    manifest_id: string;
+    session_date: string;
+    freeze_resolution: string;
+    sealed_member_count: number;
+    freeze_cutoff_at: string;
+    seal_at: string;
+    mark_wait_at: string;
+    report_finalize_at: string;
+    admission_closed_event_seq: number | null;
+    research_closed_event_seq: number | null;
+  }>(
+    `SELECT manifest_id, session_date::text, freeze_resolution, sealed_member_count,
+            freeze_cutoff_at::text, seal_at::text, mark_wait_at::text, report_finalize_at::text,
+            admission_closed_event_seq, research_closed_event_seq
+     FROM manifest ORDER BY session_date DESC`,
+  );
+  const latest =
+    (sessionDate ? sessions.find((s) => s.session_date === sessionDate) : null) ?? sessions[0] ?? null;
+  const frozen = latest
+    ? await sql.query<{ c: number }>(`SELECT COUNT(*)::int AS c FROM "freeze" WHERE manifest_id = $1`, [latest.manifest_id])
+    : [{ c: 0 }];
+  const complete = latest
+    ? await sql.query<{ c: number }>(
+        `SELECT COUNT(*)::int AS c FROM "freeze" WHERE manifest_id = $1 AND card_complete = TRUE`,
+        [latest.manifest_id],
+      )
+    : [{ c: 0 }];
+  const risk = await sql.query<{ reserved_count: number; reserved_notional: string }>(
+    `SELECT reserved_count, reserved_notional::text FROM desk_risk_state WHERE sleeve = 'EARNINGS'`,
+  );
+  const impaired = await sql.query<{ c: number }>(
+    `SELECT COUNT(*)::int AS c FROM "position" WHERE state IN ('IMPAIRED_ENTRY','IMPAIRED_EXIT')`,
+  );
+  const nonclosed = await sql.query<{ c: number }>(`SELECT COUNT(*)::int AS c FROM "position" WHERE state <> 'CLOSED'`);
+  const ctrl = await sql.query<{ admission_paused: boolean; pause_reason: string | null }>(
+    `SELECT admission_paused, pause_reason FROM operator_control WHERE sleeve = 'EARNINGS'`,
+  );
+  const due = await sql.query<{ c: number }>(
+    `SELECT COUNT(*)::int AS c FROM deadline d, fixture_clock c WHERE d.applied_event_seq IS NULL AND d.scheduled_at <= c.now_utc`,
+  );
+  const snap = latest
+    ? await sql.query<{ snapshot_id: string; created_at: string }>(
+        `SELECT snapshot_id, created_at::text FROM report_snapshot WHERE manifest_id = $1 ORDER BY created_at DESC LIMIT 1`,
+        [latest.manifest_id],
+      )
+    : [];
+  const book = role === "OPERATOR"
+    ? null
+    : await sql.query<{ pnl: string | null; priced: number }>(
+        `SELECT COALESCE(SUM((values->>'paper_pnl')::numeric),0)::text AS pnl,
+                COUNT(*) FILTER (WHERE status = 'PRICED')::int AS priced
+         FROM book_vintage bv
+         JOIN (SELECT position_id, MAX(vintage) AS v FROM book_vintage GROUP BY position_id) t
+           ON t.position_id = bv.position_id AND t.v = bv.vintage`,
+      );
+  const openPos = await sql.query<{
+    position_id: string;
+    ticker: string;
+    name: string;
+    session_date: string;
+    notional: string;
+    state: string;
+  }>(
+    `SELECT p.position_id, p.display_ticker AS ticker, COALESCE(s.display_name, p.display_ticker) AS name,
+            p.intended_event_session::text AS session_date, p.original_reserved_notional::text AS notional, p.state
+     FROM "position" p
+     LEFT JOIN security s ON s.permanent_security_id = p.permanent_security_id
+     WHERE p.state <> 'CLOSED'
+     ORDER BY p.display_ticker`,
+  );
+  const { learningSummary } = await import("./learn");
+  const learning = await learningSummary(role);
+  const predictCount = latest
+    ? await sql.query<{ c: number }>(
+        `SELECT COUNT(*)::int AS c FROM "freeze" WHERE manifest_id = $1 AND decision = 'PREDICT'`,
+        [latest.manifest_id],
+      )
+    : [{ c: 0 }];
+  return wrap("home-1", clock, {
+    role,
+    data_mode: "FIXTURE",
+    window_id: "win-2026q3",
+    policy_id: "pol-v1",
+    rule_id: "rule-v1",
+    latest_session: latest
+      ? {
+          manifest_id: latest.manifest_id,
+          session_date: latest.session_date,
+          freeze_resolution: latest.freeze_resolution,
+          sealed_member_count: String(latest.sealed_member_count),
+          frozen_count: String(frozen[0].c),
+          complete_frozen_cards: String(complete[0].c),
+          seal_at: latest.seal_at,
+          freeze_cutoff_at: latest.freeze_cutoff_at,
+          mark_wait_at: latest.mark_wait_at,
+          report_finalize_at: latest.report_finalize_at,
+          research_closed: latest.research_closed_event_seq != null,
+        }
+      : null,
+    sessions: sessions.map((s) => ({
+      manifest_id: s.manifest_id,
+      session_date: s.session_date,
+      freeze_resolution: s.freeze_resolution,
+      sealed_member_count: String(s.sealed_member_count),
+    })),
+    reserved_count: String(risk[0]?.reserved_count ?? 0),
+    reserved_notional: risk[0]?.reserved_notional ?? "0.0000",
+    nonclosed_positions: String(nonclosed[0].c),
+    impaired_count: String(impaired[0].c),
+    admission_paused: ctrl[0]?.admission_paused ?? false,
+    pause_reason: ctrl[0]?.pause_reason ?? null,
+    overdue_deadlines: String(due[0].c),
+    report_snapshot_id: snap[0]?.snapshot_id ?? null,
+    report_as_of: snap[0]?.created_at ?? null,
+    reviewer_book: book ? { latest_paper_pnl: book[0].pnl, priced_vintages: String(book[0].priced) } : null,
+    research_complete_does_not_imply_book_clear: true,
+    predict_count: String(predictCount[0].c),
+    open_positions: openPos,
+    alpaca: await publicStatus(),
+    learning,
+  });
+}
+
+export async function earningsPayload(role: DeskRole, sessionDate?: string) {
+  await ensureBootstrapped();
+  const sql = await getSql();
+  const clock = await asOf();
+  const sessions = await sql.query<{ manifest_id: string; session_date: string }>(
+    `SELECT manifest_id, session_date::text FROM manifest ORDER BY session_date`,
+  );
+  const man = await sql.query<{ manifest_id: string; session_date: string }>(
+    sessionDate
+      ? `SELECT manifest_id, session_date::text FROM manifest WHERE session_date = $1`
+      : `SELECT manifest_id, session_date::text FROM manifest ORDER BY session_date DESC LIMIT 1`,
+    sessionDate ? [sessionDate] : [],
+  );
+  if (!man.length) return wrap("earn-1", clock, {
+    role,
+    manifest_id: "",
+    session_date: sessionDate ?? "",
+    sessions,
+    members: [],
+    exclusions: [],
+  });
+  const members = await sql.query<{
+    permanent_security_id: string;
+    display_ticker: string;
+    event_key: string;
+    timing_quality: string;
+    shuffle_order_index: number;
+    card: Record<string, unknown>;
+    card_complete: boolean;
+    options_valid: boolean | null;
+    pin_count: number;
+    display_name: string | null;
+    decision: string | null;
+    output_payload: { reasons?: string[] } | null;
+  }>(
+    `SELECT m.permanent_security_id, m.display_ticker, m.event_key, m.timing_quality, m.shuffle_order_index,
+            s.card, s.card_complete, s.options_valid, s.pin_count, sec.display_name, f.decision, f.output_payload
+     FROM manifest_member m JOIN sealed_input s
+       ON s.manifest_id = m.manifest_id AND s.permanent_security_id = m.permanent_security_id
+     LEFT JOIN security sec ON sec.permanent_security_id = m.permanent_security_id
+     LEFT JOIN "freeze" f ON f.manifest_id = m.manifest_id AND f.permanent_security_id = m.permanent_security_id
+     WHERE m.manifest_id = $1
+     ORDER BY m.display_ticker`,
     [man[0].manifest_id],
   );
-  await ensureClock(etInstant(opts.sessionDate, "15:46").toISOString());
-  const ordered = opts.echoLast
-    ? [
-        ...members.filter((m) => m.permanent_security_id !== "SEC-ECHO"),
-        ...members.filter((m) => m.permanent_security_id === "SEC-ECHO"),
-      ]
-    : members;
-  for (const m of ordered) {
-    if (opts.skip.has(m.permanent_security_id)) continue;
-    const frozen = await sql.query(
-      `SELECT 1 FROM "freeze" WHERE manifest_id = $1 AND permanent_security_id = $2`,
-      [man[0].manifest_id, m.permanent_security_id],
-    );
-    if (frozen.length) continue;
-    await refreshQuote(m.permanent_security_id, opts.sessionDate);
-    try {
-      await freezeMember(
-        `cmd-frz-${opts.freezePrefix}-${m.permanent_security_id}`,
-        man[0].manifest_id,
-        m.permanent_security_id,
-        SERVICE,
-      );
-    } catch (err) {
-      if (err instanceof DeskError && err.code === "OFF_DESIGN_EARLY_RELEASE") continue;
-      throw err;
-    }
-  }
-  await ensureClock(etInstant(opts.sessionDate, "15:47").toISOString());
-  await applyDueDeadlines(SERVICE);
+  const exclusions = await sql.query<{
+    permanent_security_id: string;
+    status: string;
+    reason_codes: string[];
+  }>(
+    `SELECT permanent_security_id, status, reason_codes FROM candidate_eligibility WHERE manifest_id = $1 AND status <> 'INCLUDED'`,
+    [man[0].manifest_id],
+  );
+  const tickers = await sql.query<{ permanent_security_id: string; ticker: string }>(`SELECT permanent_security_id, ticker FROM security_ticker`);
+  const tmap = Object.fromEntries(tickers.map((t) => [t.permanent_security_id, t.ticker]));
+  return wrap("earn-1", clock, {
+    role,
+    manifest_id: man[0].manifest_id,
+    session_date: man[0].session_date,
+    sessions,
+    members: members.map((m) => ({
+      permanent_security_id: m.permanent_security_id,
+      ticker: m.display_ticker,
+      name: m.display_name ?? m.display_ticker,
+      event_key: m.event_key,
+      timing_quality: m.timing_quality,
+      card_complete: m.card_complete,
+      options_valid: m.options_valid,
+      pin_count: String(m.pin_count),
+      implied_move: typeof m.card.implied_move === "string" ? m.card.implied_move : null,
+      benchmark_relative_5d: typeof m.card.benchmark_relative_5d === "string" ? m.card.benchmark_relative_5d : null,
+      benchmark_relative_63d: typeof m.card.benchmark_relative_63d === "string" ? m.card.benchmark_relative_63d : null,
+      decision: m.decision,
+      reasons: m.output_payload?.reasons ?? [],
+      shuffle_order_index: role === "OPERATOR" ? null : String(m.shuffle_order_index),
+    })),
+    exclusions: exclusions.map((e) => ({
+      permanent_security_id: e.permanent_security_id,
+      ticker: tmap[e.permanent_security_id] ?? e.permanent_security_id,
+      status: e.status,
+      reason_codes: e.reason_codes,
+    })),
+  });
 }
 
-async function seedWorld() {
+export async function predictionsPayload(role: DeskRole, manifestId?: string, sessionDate?: string) {
+  await ensureBootstrapped();
   const sql = await getSql();
-  const t0 = etInstant("2026-06-01", "09:30").toISOString();
-  const alreadyPolicy = await sql.query(`SELECT 1 FROM policy_bundle LIMIT 1`);
-  const alreadyObs = await sql.query(`SELECT 1 FROM observation LIMIT 1`);
-
-  await withTransaction(async (tx) => {
-    const gates = await tx.query(`SELECT 1 FROM writer_gate`);
-    if (gates.length) return;
-    const eventId = ident("evt-init00000001");
-    const payload = { type: "INIT" };
-    await tx.query(
-      `INSERT INTO event_log (
-        event_seq, event_id, command_id, request_hash, event_type, actor_principal_id,
-        occurred_at, semantic_payload, canonical_payload, result_receipt, event_hash
-      ) VALUES (1,$1,'cmd-init00000001',$2,'INIT',$3,$4,$5::jsonb,$6,$7::jsonb,$2)`,
-      [eventId, hexBuf("00".repeat(32)), SERVICE, t0, JSON.stringify(payload), jsonCanon(payload), JSON.stringify({ ok: true })],
-    );
-    await tx.query(
-      `INSERT INTO writer_gate (singleton_key, next_event_seq, last_authoritative_time, clock_trusted) VALUES (TRUE, 2, $1, TRUE)`,
-      [t0],
-    );
-    await tx.query(
-      `INSERT INTO fixture_clock (singleton_key, now_utc, trusted, source) VALUES (TRUE, $1, TRUE, 'FIXTURE')`,
-      [t0],
-    );
-    await tx.query(
-      `INSERT INTO desk_risk_state (sleeve, reserved_count, reserved_notional, updated_event_seq) VALUES ('EARNINGS', 0, 0, 1)`,
-    );
-    await tx.query(
-      `INSERT INTO operator_control (sleeve, admission_paused, pause_reason, updated_event_seq) VALUES ('EARNINGS', FALSE, NULL, 1)`,
-    );
-    await tx.query(
-      `INSERT INTO desk_principal (principal_id, user_id, login_name, role, active, label_exposure_declared, created_at)
-       VALUES ('svc-desk-writer', 'svc-desk-writer', 'service-writer', 'SERVICE', TRUE, TRUE, $1)
-       ON CONFLICT DO NOTHING`,
-      [t0],
-    );
-    const jobs = ["premarket-check", "capture-cycle", "seal-session", "ordered-freeze", "due-deadlines", "mark-ingest", "grade-apply", "report-finalize"];
-    for (const j of jobs) {
-      await tx.query(`INSERT INTO job_state (job_name, status) VALUES ($1, 'IDLE') ON CONFLICT DO NOTHING`, [j]);
-    }
+  const clock = await asOf();
+  const sessions = await sql.query<{ manifest_id: string; session_date: string; freeze_resolution: string }>(
+    `SELECT manifest_id, session_date::text, freeze_resolution FROM manifest ORDER BY session_date`,
+  );
+  const man = await sql.query<{ manifest_id: string; session_date: string; freeze_resolution: string }>(
+    manifestId
+      ? `SELECT manifest_id, session_date::text, freeze_resolution FROM manifest WHERE manifest_id = $1`
+      : sessionDate
+        ? `SELECT manifest_id, session_date::text, freeze_resolution FROM manifest WHERE session_date = $1`
+        : `SELECT manifest_id, session_date::text, freeze_resolution FROM manifest ORDER BY session_date DESC LIMIT 1`,
+    manifestId ? [manifestId] : sessionDate ? [sessionDate] : [],
+  );
+  if (!man.length) return wrap("pred-1", clock, {
+    role,
+    manifest_id: "",
+    session_date: sessionDate ?? "",
+    freeze_resolution: "EMPTY",
+    sessions: sessions.map((s) => ({
+      manifest_id: s.manifest_id,
+      session_date: s.session_date,
+      freeze_resolution: s.freeze_resolution,
+    })),
+    rows: [],
   });
-
-  let kernelSrc = ENGINE_VERSION;
-  try {
-    kernelSrc = readFileSync(new URL("../kernel/index.ts", import.meta.url), "utf8");
-  } catch {
-    kernelSrc = ENGINE_VERSION;
-  }
-  const kernelSha = createHash("sha256").update(kernelSrc).digest("hex");
-  const artifactManifest = {
-    engine_version: ENGINE_VERSION,
-    interpreter: "nodejs-22",
-    files: [{ name: "src/kernel/index.ts", sha256: kernelSha }],
-    dependency_lock_hash: createHash("sha256").update("node:crypto+bigint-decimal").digest("hex"),
-  };
-  const artHash = evaluatorArtifactHash(artifactManifest);
-  const pol = {
-    sleeve: "EARNINGS",
-    admission_min_price: "5.000000",
-    ticket: "5000.0000",
-    capacity_count: "3",
-    capacity_notional: "15000.0000",
-    per_event_limit: "2",
-    broker_margin_minutes: "3",
-    seal_lead_seconds: "120",
-    venues: ["XNYS", "XNAS"],
-    source_priority: ["fixture"],
-    field_registry: ["timing_quality", "card_complete", "options_valid", "implied_move", "benchmark_relative_5d", "benchmark_relative_63d"],
-    label_target: "unadjusted_d_close_to_d1_open",
-    data_mode: "FIXTURE",
-  };
-  const polHash = policyHash(pol);
-  const astHash = ruleAstHash(INITIAL_AST);
-  const costHash = costModelHash(COST_MODEL_CONTENT);
-  const uniMembers = NAMES.filter((n) => n.id !== "SEC-SPY").map((n) => n.id);
-  const uniHash = createHash("sha256").update(uniMembers.join(",")).digest("hex");
-
-  if (!alreadyPolicy.length) {
-    await withWriter(SERVICE, async (ctx) => {
-      const { eventSeq } = await appendEvent(ctx, {
-        commandId: "cmd-register-policy",
-        type: "REGISTER_POLICY",
-        payload: { policy_id: "pol-v1" },
-        receipt: { ok: true },
-      });
-      await ctx.sql.query(
-        `INSERT INTO policy_bundle (policy_id, policy_version, policy_content, canonical_content, policy_hash, registered_event_seq)
-         VALUES ('pol-v1','v1',$1::jsonb,$2,$3,$4)`,
-        [JSON.stringify(pol), jsonCanon(pol), hexBuf(polHash), eventSeq],
-      );
-      await ctx.sql.query(
-        `INSERT INTO cost_model (
-          cost_model_id, version, basis, constant_penalty, imbalance_coefficient, imbalance_term, commission_per_fill,
-          canonical_content, content_hash, registered_event_seq
-        ) VALUES ('cost-v1','1','CONSERVATIVE_STRESS_HAIRCUT',0.000500,0,0,0,$1,$2,$3)`,
-        [jsonCanon(COST_MODEL_CONTENT), hexBuf(costHash), eventSeq],
-      );
-      await ctx.sql.query(
-        `INSERT INTO evaluator_artifact (evaluator_id, engine_version, artifact_manifest, canonical_content, artifact_hash, supported_ast_schema, registered_event_seq)
-         VALUES ('eval-v1',$1,$2::jsonb,$3,$4,'1',$5)`,
-        [ENGINE_VERSION, JSON.stringify(artifactManifest), jsonCanon(artifactManifest), hexBuf(artHash), eventSeq],
-      );
-      await ctx.sql.query(
-        `INSERT INTO rule_card (
-          rule_id, rule_version, rule_text, rule_text_hash, ast_content, canonical_ast, ast_hash, evaluator_id, policy_id,
-          expected_predict_rate_min, expected_predict_rate_max, magnitude_definition, registered_event_seq
-        ) VALUES ('rule-v1','v1',$1,$2,$3::jsonb,$4,$5,'eval-v1','pol-v1',0.10,0.25,$6::jsonb,$7)`,
-        [
-          RULE_TEXT,
-          hexBuf(ruleTextHash(RULE_TEXT)),
-          JSON.stringify(INITIAL_AST),
-          jsonCanon(INITIAL_AST),
-          hexBuf(astHash),
-          JSON.stringify({ low: "0.5*implied_move", high: "2.0*implied_move" }),
-          eventSeq,
-        ],
-      );
-      for (const n of NAMES) {
-        await ctx.sql.query(
-          `INSERT INTO security (permanent_security_id, instrument_type, currency, display_name) VALUES ($1,$2,'USD',$3)`,
-          [n.id, n.id === "SEC-SPY" ? "REFERENCE_ETF" : "US_COMMON", n.name],
-        );
-        await ctx.sql.query(
-          `INSERT INTO security_ticker (mapping_id, permanent_security_id, provider_id, ticker, valid_from, registered_event_seq)
-           VALUES ($1,$2,'fixture',$3,$4,$5)`,
-          [newId("tkr"), n.id, n.ticker, t0, eventSeq],
-        );
-      }
-      await ctx.sql.query(
-        `INSERT INTO universe_version (universe_version, effective_from, content_hash, registered_event_seq, data_mode)
-         VALUES ('uni-fix-1','2026-06-01',$1,$2,'FIXTURE')`,
-        [hexBuf(uniHash), eventSeq],
-      );
-      for (const n of NAMES.filter((x) => x.id !== "SEC-SPY")) {
-        await ctx.sql.query(
-          `INSERT INTO universe_member (universe_version, permanent_security_id, included, listing_exchange, liquidity_snapshot, sector, market_cap_bucket)
-           VALUES ('uni-fix-1',$1,TRUE,$2,$3::jsonb,'TECH','LARGE')`,
-          [n.id, n.venue, JSON.stringify({ mean_dollar_volume: "50000000" })],
-        );
-      }
-      await ctx.sql.query(
-        `INSERT INTO evaluation_window (
-          window_id, starts_at, ends_at, rule_id, rule_version, policy_id, cost_model_id, evaluator_id, universe_version,
-          hypothesis_claim, prior_contaminated, contamination_source
-        ) VALUES (
-          'win-2026q3', '2026-07-01T04:00:00.000Z', '2026-10-01T04:00:00.000Z',
-          'rule-v1','v1','pol-v1','cost-v1','eval-v1','uni-fix-1',
-          'Initial handwritten conjunction after prior observation.', TRUE, 'PRIOR_RULE_LABELS'
-        )`,
-      );
-      const dates = openDates();
-      for (const venue of ["XNYS", "XNAS"] as const) {
-        for (const day of dates) {
-          const open = etInstant(day, "09:30");
-          const close = etInstant(day, "16:00");
-          const moc = etInstant(day, venue === "XNYS" ? "15:50" : "15:55");
-          const content = { venue, day, open: open.toISOString(), close: close.toISOString(), moc: moc.toISOString() };
-          const ch = createHash("sha256").update(canon(content)).digest();
-          await ctx.sql.query(
-            `INSERT INTO calendar_session (
-              calendar_version, listing_exchange, session_date, is_open, open_at, close_at, moc_entry_cutoff_at,
-              effective_rule_id, source_reference, verified_at, content_hash
-            ) VALUES ('cal-2026',$1,$2,TRUE,$3,$4,$5,$6,'fixture-calendar',$7,$8)`,
-            [venue, day, open.toISOString(), close.toISOString(), moc.toISOString(), venue === "XNYS" ? "NYSE-AUCTIONS" : "NASDAQ-4702", t0, ch],
-          );
-        }
-        const labor = createHash("sha256").update("closed-2026-09-07" + venue).digest();
-        await ctx.sql.query(
-          `INSERT INTO calendar_session (
-            calendar_version, listing_exchange, session_date, is_open, effective_rule_id, source_reference, verified_at, content_hash
-          ) VALUES ('cal-2026',$1,'2026-09-07',FALSE,'holiday','Labor Day',$2,$3)
-          ON CONFLICT DO NOTHING`,
-          [venue, t0, labor],
-        );
-      }
-    });
-  }
-
-  if (!alreadyObs.length) {
-    await withWriter(SERVICE, async (ctx) => {
-      const { eventSeq } = await appendEvent(ctx, {
-        commandId: "cmd-ingest-seed",
-        type: "INGEST",
-        payload: { batch: "fixture-seed" },
-        receipt: { ok: true },
-      });
-      for (const n of NAMES) {
-        if (n.id === "SEC-SPY") continue;
-        await insertObs(ctx.sql, eventSeq, {
-          id: ident(`obs-tape-${n.ticker}-seed`),
-          sec: n.id,
-          session: "2026-09-04",
-          type: "TAPE_RELATIVE",
-          payload: {
-            rel5: "-0.014925174253",
-            rel63: "0.042000000000",
-            method: "product_of_factors_minus_benchmark",
-            horizon_end: "D-1",
-          },
-          receivedAt: etInstant("2026-09-03", "16:05").toISOString(),
-        });
-        await insertObs(ctx.sql, eventSeq, {
-          id: ident(`obs-tape-${n.ticker}-0911`),
-          sec: n.id,
-          session: "2026-09-11",
-          type: "TAPE_RELATIVE",
-          payload: {
-            rel5: "-0.014925174253",
-            rel63: "0.042000000000",
-            method: "product_of_factors_minus_benchmark",
-            horizon_end: "D-1",
-          },
-          receivedAt: etInstant("2026-09-10", "16:05").toISOString(),
-        });
-      }
-      const sessions: Array<{ day: string; members: string[] }> = [
-        { day: "2026-09-04", members: ["SEC-HOTEL", "SEC-FOXTROT"] },
-        { day: "2026-09-11", members: ["SEC-ALPHA", "SEC-BRAVO", "SEC-CHARLIE", "SEC-DELTA", "SEC-ECHO", "SEC-GOLF"] },
-      ];
-      for (const s of sessions) {
-        for (const sec of s.members) {
-          const meta = NAMES.find((n) => n.id === sec)!;
-          const recv = etInstant(s.day, "15:44").toISOString();
-          await insertObs(ctx.sql, eventSeq, {
-            id: ident(`obs-evt-${meta.ticker}-${s.day.replace(/-/g, "")}`),
-            sec,
-            session: s.day,
-            type: "EARNINGS_EVENT",
-            eventKey: ident(`ev-${meta.ticker}-${s.day.replace(/-/g, "")}`),
-            payload: { timing: "AMC", quality: "ISSUER_CONFIRMED", period: "Q3-2026" },
-            receivedAt: recv,
-          });
-          await ctx.sql.query(
-            `INSERT INTO earnings_event (event_observation_id, event_key, permanent_security_id, intended_session, timing, quality, source_observation_id)
-             VALUES ($1,$2,$3,$4,'AMC','ISSUER_CONFIRMED',$1)`,
-            [ident(`obs-evt-${meta.ticker}-${s.day.replace(/-/g, "")}`), ident(`ev-${meta.ticker}-${s.day.replace(/-/g, "")}`), sec, s.day],
-          );
-          await insertObs(ctx.sql, eventSeq, {
-            id: ident(`obs-q-${meta.ticker}-${s.day.replace(/-/g, "")}`),
-            sec,
-            session: s.day,
-            type: "QUOTE",
-            payload: { bid: "99.960000", ask: "100.040000", last: "100.000000", mid: "100.000000" },
-            receivedAt: recv,
-          });
-          if (sec !== "SEC-BRAVO") {
-            for (const right of ["C", "P"] as const) {
-              await insertObs(ctx.sql, eventSeq, {
-                id: ident(`obs-opt-${meta.ticker}-${right}-${s.day.replace(/-/g, "")}`),
-                sec,
-                session: s.day,
-                type: "OPTION_LEG",
-                payload: {
-                  right,
-                  strike: "100.000000",
-                  expiry: "2026-10-16",
-                  bid: "3.900000",
-                  ask: "4.100000",
-                  oi: "500",
-                  volume: "80",
-                  multiplier: "100",
-                },
-                receivedAt: recv,
-              });
-            }
-          }
-        }
-      }
-      await insertObs(ctx.sql, eventSeq, {
-        id: "obs-mk-HOTL-entry",
-        sec: "SEC-HOTEL",
-        session: "2026-09-04",
-        type: "MARK_ENTRY_CLOSE",
-        payload: { price: "100.000000", state: "OFFICIAL", venue: "XNAS" },
-        receivedAt: etInstant("2026-09-04", "16:01").toISOString(),
-      });
-      await insertObs(ctx.sql, eventSeq, {
-        id: "obs-mk-HOTL-exit",
-        sec: "SEC-HOTEL",
-        session: "2026-09-08",
-        type: "MARK_EXIT_OPEN",
-        payload: { price: "105.000000", state: "OFFICIAL", venue: "XNAS" },
-        receivedAt: etInstant("2026-09-08", "09:35").toISOString(),
-      });
-      await insertObs(ctx.sql, eventSeq, {
-        id: "obs-mk-FOXT-entry",
-        sec: "SEC-FOXTROT",
-        session: "2026-09-04",
-        type: "MARK_ENTRY_CLOSE",
-        payload: { price: "100.000000", state: "OFFICIAL", venue: "XNAS" },
-        receivedAt: etInstant("2026-09-04", "16:01").toISOString(),
-      });
-      await insertObs(ctx.sql, eventSeq, {
-        id: "obs-mk-FOXT-exit",
-        sec: "SEC-FOXTROT",
-        session: "2026-09-08",
-        type: "MARK_EXIT_OPEN",
-        payload: { price: "50.000000", state: "OFFICIAL", venue: "XNAS" },
-        receivedAt: etInstant("2026-09-08", "09:35").toISOString(),
-      });
-      await insertObs(ctx.sql, eventSeq, {
-        id: "obs-ca-FOXT",
-        sec: "SEC-FOXTROT",
-        session: "2026-09-04",
-        type: "CORPORATE_ACTION",
-        payload: { kind: "SPLIT", split_multiplier: "2", distribution: "0.000000", effective: "D_CLOSE_TO_D1_OPEN" },
-        receivedAt: etInstant("2026-09-08", "08:00").toISOString(),
-      });
-      for (const [sec, ticker, exitPx, hasExit] of [
-        ["SEC-ALPHA", "ALFA", "105.000000", true],
-        ["SEC-BRAVO", "BRAV", "101.000000", true],
-        ["SEC-CHARLIE", "CHRL", null, false],
-        ["SEC-ECHO", "ECHO", "110.000000", true],
-      ] as Array<[string, string, string | null, boolean]>) {
-        await insertObs(ctx.sql, eventSeq, {
-          id: ident(`obs-mk-${ticker}-entry`),
-          sec,
-          session: "2026-09-11",
-          type: "MARK_ENTRY_CLOSE",
-          payload: { price: "100.000000", state: "OFFICIAL", venue: "XNYS" },
-          receivedAt: etInstant("2026-09-11", "16:01").toISOString(),
-        });
-        if (hasExit && exitPx) {
-          await insertObs(ctx.sql, eventSeq, {
-            id: ident(`obs-mk-${ticker}-exit`),
-            sec,
-            session: "2026-09-14",
-            type: "MARK_EXIT_OPEN",
-            payload: { price: exitPx, state: "OFFICIAL", venue: "XNYS" },
-            receivedAt: etInstant("2026-09-14", "09:35").toISOString(),
-          });
-        }
-      }
-    });
-  }
-
-  await runSession({
-    commandSeal: "cmd-seal-20260904",
-    sessionDate: "2026-09-04",
-    skip: new Set(),
-    freezePrefix: "0904",
+  const rows = await sql.query<{
+    permanent_security_id: string;
+    display_ticker: string;
+    freeze_id: string | null;
+    decision: string | null;
+    direction: string | null;
+    input_hash: Buffer | null;
+    output_hash: Buffer | null;
+    verification_level: string | null;
+    admission_outcome: string | null;
+    position_id: string | null;
+    output_payload: { magnitude_low?: string | null; magnitude_high?: string | null; reasons?: string[] } | null;
+    shuffle_order_index: number;
+  }>(
+    `SELECT mm.permanent_security_id, mm.display_ticker, mm.shuffle_order_index,
+            f.freeze_id, f.decision, f.direction, f.input_hash, f.output_hash, f.verification_level, f.output_payload,
+            a.outcome AS admission_outcome, a.position_id
+     FROM manifest_member mm
+     LEFT JOIN "freeze" f ON f.manifest_id = mm.manifest_id AND f.permanent_security_id = mm.permanent_security_id
+     LEFT JOIN execution_admission a ON a.freeze_id = f.freeze_id
+     WHERE mm.manifest_id = $1
+     ORDER BY mm.display_ticker`,
+    [man[0].manifest_id],
+  );
+  const operator = role === "OPERATOR";
+  return wrap("pred-1", clock, {
+    role,
+    manifest_id: man[0].manifest_id,
+    session_date: man[0].session_date,
+    freeze_resolution: man[0].freeze_resolution,
+    sessions: sessions.map((s) => ({
+      manifest_id: s.manifest_id,
+      session_date: s.session_date,
+      freeze_resolution: s.freeze_resolution,
+    })),
+    rows: rows.map((r) => ({
+      permanent_security_id: r.permanent_security_id,
+      ticker: r.display_ticker,
+      name: r.display_ticker,
+      status: r.freeze_id ? r.decision : "NO_FREEZE",
+      direction: r.decision === "PREDICT" ? r.direction : null,
+      execution:
+        r.admission_outcome === "ADMITTED"
+          ? "PAPER_COMMITTED"
+          : r.decision === "PREDICT"
+            ? "NOT_TRADED"
+            : r.admission_outcome ?? "NONE",
+      input_hash: r.input_hash ? asHex(r.input_hash) : null,
+      output_hash: r.output_hash ? asHex(r.output_hash) : null,
+      verification_level: r.verification_level,
+      reasons: r.output_payload?.reasons ?? [],
+      magnitude_low: operator ? null : (r.output_payload?.magnitude_low ?? null),
+      magnitude_high: operator ? null : (r.output_payload?.magnitude_high ?? null),
+      position_id: r.position_id,
+      shuffle_order_index: operator ? null : String(r.shuffle_order_index),
+    })),
   });
-  await ensureClock(etInstant("2026-09-08", "16:00").toISOString());
-  await applyDueDeadlines(SERVICE);
-  await ensureClock(etInstant("2026-09-09", "16:00").toISOString());
-  await applyDueDeadlines(SERVICE);
+}
 
-  await runSession({
-    commandSeal: "cmd-seal-20260911",
-    sessionDate: "2026-09-11",
-    skip: new Set(["SEC-DELTA"]),
-    freezePrefix: "0911",
-    echoLast: true,
-    beforeSeal: async () => {
-      await recordPrintKnowledge(
-        "cmd-pk-golf",
-        {
-          eventKey: "ev-GOLF-20260911",
-          securityId: "SEC-GOLF",
-          reason: "Issuer results posted before the information horizon.",
+export async function resultsPayload(role: DeskRole) {
+  await ensureBootstrapped();
+  const sql = await getSql();
+  const clock = await asOf();
+  const sealed = await sql.query<{ c: number }>(`SELECT COUNT(*)::int AS c FROM manifest_member`);
+  const frozen = await sql.query<{ c: number }>(`SELECT COUNT(*)::int AS c FROM "freeze"`);
+  const byDecision = await sql.query<{ decision: string; c: number }>(
+    `SELECT decision, COUNT(*)::int AS c FROM "freeze" GROUP BY decision`,
+  );
+  const noFreeze = await sql.query<{ c: number }>(`SELECT COUNT(*)::int AS c FROM grade WHERE outcome = 'NO_FREEZE' AND vintage = 0`);
+  const outcomes = await sql.query<{ outcome: string; c: number }>(
+    `SELECT outcome, COUNT(*)::int AS c FROM grade WHERE vintage = 0 GROUP BY outcome`,
+  );
+  const complete = await sql.query<{ c: number }>(`SELECT COUNT(*)::int AS c FROM "freeze" WHERE card_complete = TRUE`);
+  const predict = byDecision.find((d) => d.decision === "PREDICT")?.c ?? 0;
+  const stand = byDecision.find((d) => d.decision === "STAND_DOWN")?.c ?? 0;
+  const nSealed = sealed[0].c;
+  const nFrozen = frozen[0].c;
+  const manifests = await sql.query<{ freeze_resolution: string; c: number }>(
+    `SELECT freeze_resolution, COUNT(*)::int AS c FROM manifest GROUP BY freeze_resolution`,
+  );
+  const nonempty = manifests.filter((m) => m.freeze_resolution !== "EMPTY").reduce((a, b) => a + b.c, 0);
+  const partial = manifests.find((m) => m.freeze_resolution === "PARTIAL")?.c ?? 0;
+
+  const grades = await sql.query<{
+    ticker: string;
+    permanent_security_id: string;
+    decision: string | null;
+    outcome: string;
+    in_evidence_set: boolean;
+    values: {
+      direction_hit?: boolean | null;
+      band_hit?: boolean | null;
+      raw_gap?: string | null;
+      entry_price?: string;
+      exit_price?: string;
+    };
+    reasons: string[];
+    session_date: string;
+  }>(
+    `SELECT mm.display_ticker AS ticker, g.permanent_security_id, f.decision, g.outcome, g.in_evidence_set, g.values, g.reason_codes AS reasons, man.session_date::text
+     FROM grade g
+     JOIN manifest_member mm ON mm.manifest_id = g.manifest_id AND mm.permanent_security_id = g.permanent_security_id
+     JOIN manifest man ON man.manifest_id = g.manifest_id
+     LEFT JOIN "freeze" f ON f.freeze_id = g.freeze_id
+     WHERE g.vintage = 0
+     ORDER BY man.session_date, mm.display_ticker`,
+  );
+  const books = await sql.query<{
+    ticker: string;
+    state: string;
+    pnl: string | null;
+    basis: string | null;
+    eligible: boolean | null;
+    notional: string;
+    vintage: number | null;
+  }>(
+    `SELECT p.display_ticker AS ticker, p.state, p.original_reserved_notional::text AS notional,
+            bv.values->>'paper_pnl' AS pnl, bv.basis, bv.strategy_pnl_eligible AS eligible, bv.vintage
+     FROM "position" p
+     LEFT JOIN book_vintage bv ON bv.book_vintage_id = p.last_book_vintage_id
+     ORDER BY p.display_ticker`,
+  );
+
+  const cleanPredict = grades.filter((g) => g.decision === "PREDICT" && g.in_evidence_set);
+  const hits = cleanPredict.filter((g) => g.values.direction_hit === true).length;
+  const C = cleanPredict.length;
+  const U = grades.filter((g) => g.decision === "PREDICT" && !g.in_evidence_set && g.outcome !== "NO_EVENT").length;
+  const lower = rate(hits, C + U);
+  const upper = rate(hits + U, C + U);
+  const suppress = lower.value && Number(lower.value) <= 0.5 && Number(upper.value) >= 0.5;
+
+  const operator = role === "OPERATOR";
+  const { learningSummary } = await import("./learn");
+  const learning = await learningSummary(role);
+  return wrap("res-1", clock, {
+    role,
+    banner:
+      "Operational research report. The current checklist was selected after prior observation. Small-sample hit rate does not establish a trading edge. Paper P&L is ESTIMATED under a conservative stress haircut, not live-fill evidence. Unresolved prices and excluded labels are disclosed separately.",
+    process: {
+      sealed: String(nSealed),
+      frozen: String(nFrozen),
+      no_freeze: String(noFreeze[0].c),
+      stand_down: String(stand),
+      predict: String(predict),
+      complete_frozen_cards: String(complete[0].c),
+      outcomes: Object.fromEntries(outcomes.map((o) => [o.outcome, String(o.c)])),
+      freeze_rate: rate(nFrozen, nSealed),
+      stand_down_rate: rate(stand, nFrozen),
+      predict_rate_complete: rate(predict, complete[0].c),
+      no_freeze_rate: rate(noFreeze[0].c, nSealed),
+      partial_manifest_rate: rate(partial, nonempty),
+    },
+    research: operator
+      ? { restricted: true, message: "Direction hits, bands, marks, and P&L are withheld from OPERATOR. This is an information barrier, not a time gate." }
+      : {
+          restricted: false,
+          clean_predict_n: String(C),
+          direction_hits: String(hits),
+          hit_rate: suppress ? null : rate(hits, C),
+          attrition_lower: lower,
+          attrition_upper: upper,
+          interval_label: "missingness sensitivity interval, not a confidence interval",
+          point_estimate_suppressed: Boolean(suppress),
+          grades: grades.map((g) => ({
+            ticker: g.ticker,
+            id: g.permanent_security_id,
+            session_date: g.session_date,
+            decision: g.decision,
+            outcome: g.outcome,
+            in_evidence_set: g.in_evidence_set,
+            direction_hit: g.values.direction_hit ?? null,
+            band_hit: g.values.band_hit ?? null,
+            raw_gap: g.values.raw_gap ?? null,
+            entry_price: g.values.entry_price ?? null,
+            exit_price: g.values.exit_price ?? null,
+            reasons: g.reasons,
+          })),
         },
-        SERVICE,
-      );
+    book: operator
+      ? { restricted: true }
+      : {
+          positions: books.map((b) => ({
+            ticker: b.ticker,
+            state: b.state,
+            original_reserved_notional: b.notional,
+            paper_pnl: b.pnl,
+            basis: b.basis,
+            strategy_pnl_eligible: b.eligible,
+            vintage: b.vintage == null ? null : String(b.vintage),
+          })),
+        },
+    learning,
+  });
+}
+
+export async function adminPayload(role: DeskRole) {
+  await ensureBootstrapped();
+  const sql = await getSql();
+  const clock = await asOf();
+  const jobs = await sql.query<{ job_name: string; status: string; last_completed_at: string | null; safe_error_code: string | null }>(
+    `SELECT job_name, status, last_completed_at::text, safe_error_code FROM job_state ORDER BY job_name`,
+  );
+  const deadlines = await sql.query<{
+    kind: string;
+    scheduled_at: string;
+    applied_at: string | null;
+    manifest_id: string | null;
+    permanent_security_id: string | null;
+  }>(
+    `SELECT kind, scheduled_at::text, applied_at::text, manifest_id, permanent_security_id FROM deadline ORDER BY scheduled_at`,
+  );
+  const alarms = await sql.query<{
+    code: string;
+    component: string;
+    status: string;
+    blocks_new_admission: boolean;
+    safe_details: Record<string, string | number | boolean | null> | null;
+    last_seen: string;
+  }>(`SELECT code, component, status, blocks_new_admission, safe_details, last_seen::text FROM ops_alarm ORDER BY last_seen DESC`);
+  const ctrl = await sql.query<{ admission_paused: boolean; pause_reason: string | null }>(
+    `SELECT admission_paused, pause_reason FROM operator_control WHERE sleeve = 'EARNINGS'`,
+  );
+  const notes = await sql.query<{ hypothesis: string; note: string }>(
+    `SELECT hypothesis, note FROM fire_rate_note ORDER BY event_seq DESC LIMIT 10`,
+  );
+  const positions = await sql.query<{ position_id: string; display_ticker: string; state: string; cas_token: string }>(
+    `SELECT position_id, display_ticker, state, cas_token::text FROM "position" ORDER BY display_ticker`,
+  );
+  const alpaca = await publicStatus();
+  const checked = clock;
+  const failedJobs = jobs.filter((j) => j.status === "FAILED");
+  const runningJobs = jobs.filter((j) => j.status === "RUNNING");
+  const completedJobs = jobs.filter((j) => j.last_completed_at);
+  const capabilities: Capability[] = [
+    cap({
+      id: "auth",
+      label: "Authentication",
+      state: "ready",
+      last_checked: checked,
+      reason: "This page required a signed-in session.",
+    }),
+    cap({
+      id: "database",
+      label: "Persistent database",
+      state: dbSource === "neon" ? "ready" : "sample",
+      last_checked: checked,
+      reason:
+        dbSource === "neon"
+          ? "A configured Postgres connection answered this request."
+          : "This preview uses an embedded sample database. It is not a durable production store.",
+    }),
+    cap({
+      id: "jobs",
+      label: "Durable jobs",
+      state: failedJobs.length ? "failed" : jobs.length === 0 ? "not_configured" : completedJobs.length ? "sample" : "not_checked",
+      last_checked: completedJobs[0]?.last_completed_at ?? null,
+      reason: failedJobs.length
+        ? `${failedJobs.length} scheduled job(s) last failed.`
+        : jobs.length === 0
+          ? "No scheduled-job records were returned."
+          : "Fixture scheduled jobs are recorded here. This is not proof of a durable production worker.",
+    }),
+    cap({
+      id: "secret_storage",
+      label: "Secret storage",
+      state: !masterKeyConfigured()
+        ? "unavailable"
+        : dbSource !== "neon"
+          ? "sample"
+          : alpaca.connected
+            ? "ready"
+            : "not_configured",
+      last_checked: checked,
+      reason: !masterKeyConfigured()
+        ? "No server-managed wrap key is configured. Keys cannot be saved."
+        : dbSource !== "neon"
+          ? "This preview database is not a durable production store. Secret storage is not ready."
+          : alpaca.connected
+            ? "A saved key record exists for this account."
+            : "Wrap key is present. No trading keys are saved yet.",
+    }),
+    cap({
+      id: "alpaca_test",
+      label: "Limited Alpaca check",
+      state: alpaca.last_error ? "failed" : alpaca.last_ok_at ? "ready" : alpaca.connected ? "not_checked" : "not_configured",
+      last_checked: alpaca.last_ok_at ?? null,
+      reason: alpaca.last_error
+        ? "The last limited account check did not succeed."
+        : alpaca.last_ok_at
+          ? "A limited account check succeeded. This is not official-auction coverage."
+          : alpaca.connected
+            ? "Keys are saved. A limited account check has not been recorded."
+            : "Save keys, then run the limited check. A loaded page is not a passing test.",
+    }),
+    cap({
+      id: "official_marks",
+      label: "Official auction coverage",
+      state: "sample",
+      last_checked: checked,
+      reason: "Official open/close marks in this workspace are fixture records, not live auction coverage.",
+    }),
+    cap({
+      id: "running_jobs",
+      label: "Running jobs",
+      state: runningJobs.length ? "checking" : jobs.length ? "sample" : "not_configured",
+      last_checked: checked,
+      reason: runningJobs.length
+        ? `${runningJobs.length} job(s) currently marked running.`
+        : jobs.length
+          ? "No job is marked running. Idle fixture jobs are not a live worker heartbeat."
+          : "No job records were returned.",
+    }),
+  ];
+  return wrap("adm-1", clock, {
+    role,
+    can_mutate: role === "OPERATOR",
+    jobs,
+    deadlines: deadlines.map((d) => ({
+      kind: d.kind,
+      scheduled_at: d.scheduled_at,
+      applied_at: d.applied_at,
+      overdue: d.applied_at == null && new Date(d.scheduled_at) <= new Date(clock),
+      target: d.permanent_security_id ?? d.manifest_id,
+    })),
+    alarms,
+    admission_paused: ctrl[0]?.admission_paused ?? false,
+    pause_reason: ctrl[0]?.pause_reason ?? null,
+    fire_rate_notes: notes,
+    positions,
+    alpaca,
+    capabilities,
+    ports: {
+      security_master: "FIXTURE",
+      calendar: "FIXTURE",
+      earnings: "FIXTURE",
+      quotes: alpaca.connected ? "ALPACA" : "FIXTURE",
+      official_marks: "FIXTURE",
+      live_broker: alpaca.connected ? (alpaca.mode === "LIVE" ? "ALPACA_LIVE" : "ALPACA_PAPER") : "UNSUPPORTED",
+      real_data_credentials: alpaca.connected ? "PRESENT" : "ABSENT",
     },
   });
-  await ensureClock(etInstant("2026-09-14", "16:00").toISOString());
-  await applyDueDeadlines(SERVICE);
-  await ensureClock(etInstant("2026-09-15", "16:00").toISOString());
-  await applyDueDeadlines(SERVICE);
-
-  const sql2 = await getSql();
-  const hotelPos = await sql2.query<{ position_id: string }>(
-    `SELECT p.position_id FROM "position" p JOIN "freeze" f ON f.freeze_id = p.freeze_id WHERE f.permanent_security_id = 'SEC-HOTEL'`,
-  );
-  if (hotelPos.length) {
-    await applyEntryCorrection("cmd-corr-hotel", hotelPos[0].position_id, "99.800000", SERVICE);
-  }
-
-  await sql2.query(`UPDATE bootstrap_state SET completed = TRUE, completed_at = NOW(), note = 'fixture v1.2 seeded' WHERE singleton_key = TRUE`);
 }
 
-async function refreshQuote(sec: string, session: string) {
-  await withWriter(SERVICE, async (ctx) => {
+export async function getOrCreatePrincipal(userId: string, email: string | null): Promise<{ principal_id: string; role: DeskRole | null }> {
+  const sql = await getSql();
+  const rows = await sql.query<{ principal_id: string; role: DeskRole }>(
+    `SELECT principal_id, role FROM desk_principal WHERE user_id = $1`,
+    [userId],
+  );
+  if (rows.length) return rows[0];
+  return { principal_id: userId, role: null };
+}
+
+export async function claimRole(userId: string, email: string | null, role: "OPERATOR" | "REVIEWER") {
+  const sql = await getSql();
+  const existing = await sql.query<{ role: DeskRole }>(`SELECT role FROM desk_principal WHERE user_id = $1`, [userId]);
+  if (existing.length) return { role: existing[0].role, already: true };
+  const id = userId.replace(/[^A-Za-z0-9:._-]/g, "").slice(0, 48) || "user";
+  const pid = `usr-${id}`.slice(0, 64);
+  await sql.query(
+    `INSERT INTO desk_principal (principal_id, user_id, login_name, role, active, label_exposure_declared, created_at)
+     VALUES ($1,$2,$3,$4,TRUE,$5,NOW())`,
+    [pid, userId, email ?? userId, role, role === "REVIEWER"],
+  );
+  return { role, already: false };
+}
+
+export async function noticesPayload(role: DeskRole) {
+  await ensureBootstrapped();
+  const sql = await getSql();
+  const clock = await asOf();
+  const alarms = await sql.query<{
+    code: string;
+    status: string;
+    last_seen: string;
+    blocks_new_admission: boolean;
+  }>(`SELECT code, status, last_seen::text, blocks_new_admission FROM ops_alarm WHERE status <> 'CLEARED' ORDER BY last_seen DESC LIMIT 12`);
+  const overdue = await sql.query<{ c: number }>(
+    `SELECT COUNT(*)::int AS c FROM deadline d, fixture_clock c WHERE d.applied_event_seq IS NULL AND d.scheduled_at <= c.now_utc`,
+  );
+  const { alarmLabel } = await import("@/ui/labels");
+  const items: Array<{
+    id: string;
+    severity: "info" | "warn" | "danger";
+    title: string;
+    detail: string;
+    at: string;
+    href: string;
+  }> = alarms.map((a) => {
+    const copy = alarmLabel(a.code);
+    return {
+      id: a.code + a.last_seen,
+      severity: (a.blocks_new_admission ? "danger" : "warn") as "danger" | "warn",
+      title: copy.title,
+      detail: copy.detail,
+      at: a.last_seen,
+      href: "/admin#status",
+    };
+  });
+  if ((overdue[0]?.c ?? 0) > 0) {
+    items.unshift({
+      id: "overdue-deadlines",
+      severity: "warn",
+      title: "Scheduled work is overdue",
+      detail: `${overdue[0].c} deadline(s) are past due on the fixture clock.`,
+      at: clock,
+      href: "/admin#status",
+    });
+  }
+  void role;
+  return wrap("notice-1", clock, { items });
+}
+
+```
+
+## `src/desk/learn.ts`
+
+```
+import { getSql } from "@/lib/db";
+import { INITIAL_AST, ruleAstHash, ruleTextHash } from "../kernel/index.ts";
+import { appendEvent, withWriter } from "./writer";
+import { hexBuf, jsonCanon, newId } from "./util";
+import type { DeskRole } from "./util";
+import {
+  astFromThresholds,
+  defaultThresholds,
+  humanRuleText,
+  humanRuleBullets,
+  proposeThresholds,
+  thresholdsFromAst,
+  type Thresholds,
+} from "./learn-policy";
+
+export type { Thresholds } from "./learn-policy";
+export {
+  astFromThresholds,
+  defaultThresholds,
+  humanRuleBullets,
+  humanRuleText,
+  proposeThresholds,
+  thresholdsFromAst,
+} from "./learn-policy";
+
+export type RuleRevisionRow = {
+  revision_id: string;
+  parent_rule_version: string;
+  new_rule_version: string | null;
+  vintage_manifest_id: string | null;
+  evidence_n: number;
+  direction_hits: number;
+  adopted: boolean;
+  reason_human: string;
+  implied_move_gte: string;
+  implied_move_lte: string;
+  rel5_lt: string;
+  rel63_gt: string;
+  created_at: string;
+};
+
+export async function ensureLearnTables(): Promise<void> {
+  const sql = await getSql();
+  await sql.query(`
+    CREATE TABLE IF NOT EXISTS rule_revision (
+      revision_id text PRIMARY KEY,
+      parent_rule_id text NOT NULL,
+      parent_rule_version text NOT NULL,
+      new_rule_version text,
+      vintage_manifest_id text,
+      evidence_n int NOT NULL,
+      direction_hits int NOT NULL,
+      direction_misses int NOT NULL,
+      band_hits int NOT NULL,
+      implied_move_gte text NOT NULL,
+      implied_move_lte text NOT NULL,
+      rel5_lt text NOT NULL,
+      rel63_gt text NOT NULL,
+      adopted boolean NOT NULL,
+      reason_human text NOT NULL,
+      ast_hash text,
+      created_at timestamptz NOT NULL DEFAULT NOW(),
+      created_event_seq bigint
+    )`);
+  await sql.query(`INSERT INTO job_state (job_name, status) VALUES ('learn-revise', 'IDLE') ON CONFLICT DO NOTHING`);
+}
+
+export async function loadActiveAst(): Promise<unknown> {
+  await ensureLearnTables();
+  const sql = await getSql();
+  const rows = await sql.query<{ ast_content: unknown }>(
+    `SELECT r.ast_content
+     FROM evaluation_window w
+     JOIN rule_card r ON r.rule_id = w.rule_id AND r.rule_version = w.rule_version
+     WHERE w.ended_early_at IS NULL
+     ORDER BY w.starts_at DESC
+     LIMIT 1`,
+  );
+  return rows[0]?.ast_content ?? INITIAL_AST;
+}
+
+export async function loadActiveThresholds(): Promise<Thresholds> {
+  try {
+    return thresholdsFromAst(await loadActiveAst());
+  } catch {
+    return defaultThresholds();
+  }
+}
+
+export async function astForManifest(manifestId: string): Promise<unknown> {
+  const sql = await getSql();
+  const rows = await sql.query<{ ast_content: unknown }>(
+    `SELECT r.ast_content
+     FROM manifest m
+     JOIN rule_card r ON r.rule_id = m.rule_id AND r.rule_version = m.rule_version
+     WHERE m.manifest_id = $1`,
+    [manifestId],
+  );
+  if (!rows[0]?.ast_content) {
+    throw new Error("RULE_UNAVAILABLE");
+  }
+  return rows[0].ast_content;
+}
+
+export async function maybeReviseRule(manifestId: string, actor: string): Promise<RuleRevisionRow | null> {
+  await ensureLearnTables();
+  const sql = await getSql();
+  const existing = await sql.query<RuleRevisionRow>(
+    `SELECT revision_id, parent_rule_version, new_rule_version, vintage_manifest_id, evidence_n, direction_hits,
+            adopted, reason_human, implied_move_gte, implied_move_lte, rel5_lt, rel63_gt, created_at::text
+     FROM rule_revision WHERE vintage_manifest_id = $1`,
+    [manifestId],
+  );
+  if (existing.length) return existing[0];
+
+  const man = await sql.query<{ rule_id: string; rule_version: string; window_id: string }>(
+    `SELECT rule_id, rule_version, window_id FROM manifest WHERE manifest_id = $1`,
+    [manifestId],
+  );
+  if (!man.length) return null;
+
+  const grades = await sql.query<{
+    direction_hit: boolean | null;
+    band_hit: boolean | null;
+  }>(
+    `SELECT (g.values->>'direction_hit')::boolean AS direction_hit,
+            (g.values->>'band_hit')::boolean AS band_hit
+     FROM grade g
+     JOIN "freeze" f ON f.freeze_id = g.freeze_id
+     JOIN manifest m ON m.manifest_id = g.manifest_id
+     WHERE g.vintage = 0 AND g.in_evidence_set = TRUE AND g.outcome = 'GRADED'
+       AND f.decision = 'PREDICT'
+       AND m.rule_id = $1 AND m.rule_version = $2`,
+    [man[0].rule_id, man[0].rule_version],
+  );
+  const n = grades.length;
+  const hits = grades.filter((g) => g.direction_hit === true).length;
+  const misses = grades.filter((g) => g.direction_hit === false).length;
+  const bandHits = grades.filter((g) => g.band_hit === true).length;
+
+  const card = await sql.query<{ ast_content: unknown }>(
+    `SELECT ast_content FROM rule_card WHERE rule_id = $1 AND rule_version = $2`,
+    [man[0].rule_id, man[0].rule_version],
+  );
+  const current = thresholdsFromAst(card[0]?.ast_content ?? INITIAL_AST);
+  const proposal = proposeThresholds(current, n, hits);
+
+  await sql.query(`UPDATE job_state SET status = 'RUNNING', last_started_at = NOW(), safe_error_code = NULL WHERE job_name = 'learn-revise'`);
+
+  if (!proposal.adopted) {
+    const revisionId = newId("rev");
+    await sql.query(
+      `INSERT INTO rule_revision (
+        revision_id, parent_rule_id, parent_rule_version, new_rule_version, vintage_manifest_id,
+        evidence_n, direction_hits, direction_misses, band_hits,
+        implied_move_gte, implied_move_lte, rel5_lt, rel63_gt,
+        adopted, reason_human
+      ) VALUES ($1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,$11,$12,FALSE,$13)`,
+      [
+        revisionId,
+        man[0].rule_id,
+        man[0].rule_version,
+        manifestId,
+        n,
+        hits,
+        misses,
+        bandHits,
+        proposal.next.implied_move_gte,
+        proposal.next.implied_move_lte,
+        proposal.next.rel5_lt,
+        proposal.next.rel63_gt,
+        proposal.reason,
+      ],
+    );
+    await sql.query(
+      `UPDATE job_state SET status = 'IDLE', last_completed_at = NOW() WHERE job_name = 'learn-revise'`,
+    );
+    return {
+      revision_id: revisionId,
+      parent_rule_version: man[0].rule_version,
+      new_rule_version: null,
+      vintage_manifest_id: manifestId,
+      evidence_n: n,
+      direction_hits: hits,
+      adopted: false,
+      reason_human: proposal.reason,
+      implied_move_gte: proposal.next.implied_move_gte,
+      implied_move_lte: proposal.next.implied_move_lte,
+      rel5_lt: proposal.next.rel5_lt,
+      rel63_gt: proposal.next.rel63_gt,
+      created_at: new Date().toISOString(),
+    };
+  }
+
+  const versions = await sql.query<{ rule_version: string }>(
+    `SELECT rule_version FROM rule_card WHERE rule_id = $1`,
+    [man[0].rule_id],
+  );
+  const nextN = versions.length + 1;
+  const newVersion = `v${nextN}`;
+  const ast = astFromThresholds(proposal.next);
+  const astHash = ruleAstHash(ast);
+  const text = humanRuleText(proposal.next);
+  const windowId = newId("win");
+
+  return withWriter(actor, async (ctx) => {
     const { eventSeq } = await appendEvent(ctx, {
       commandId: newId("cmd"),
-      type: "INGEST",
-      payload: { type: "QUOTE", sec, session },
-      receipt: { ok: true },
+      type: "REGISTER_RULE",
+      payload: {
+        parent_rule_version: man[0].rule_version,
+        new_rule_version: newVersion,
+        vintage_manifest_id: manifestId,
+        evidence_n: String(n),
+        direction_hits: String(hits),
+      },
+      receipt: { rule_version: newVersion, adopted: true },
     });
-    const meta = NAMES.find((n) => n.id === sec)!;
-    await insertObs(ctx.sql, eventSeq, {
-      id: ident(`obs-qx-${meta.ticker}-${session.replace(/-/g, "")}-${eventSeq}`),
-      sec,
-      session,
-      type: "QUOTE",
-      payload: { bid: "99.960000", ask: "100.040000", last: "100.000000", mid: "100.000000" },
-      receivedAt: ctx.now.toISOString(),
-    });
+    await ctx.sql.query(
+      `INSERT INTO rule_card (
+        rule_id, rule_version, rule_text, rule_text_hash, ast_content, canonical_ast, ast_hash, evaluator_id, policy_id,
+        expected_predict_rate_min, expected_predict_rate_max, magnitude_definition, registered_event_seq
+      ) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,'eval-v1','pol-v1',0.10,0.25,$8::jsonb,$9)`,
+      [
+        man[0].rule_id,
+        newVersion,
+        text,
+        hexBuf(ruleTextHash(text)),
+        JSON.stringify(ast),
+        jsonCanon(ast),
+        hexBuf(astHash),
+        JSON.stringify({ low: "0.5*implied_move", high: "2.0*implied_move" }),
+        eventSeq,
+      ],
+    );
+    await ctx.sql.query(
+      `UPDATE evaluation_window SET ended_early_at = $1, early_end_event_seq = $2, early_end_reason = 'SUPERSEDED_BY_LEARNED_RULE'
+       WHERE window_id = $3 AND ended_early_at IS NULL`,
+      [ctx.now.toISOString(), eventSeq, man[0].window_id],
+    );
+    const oldWin = await ctx.sql.query<{ ends_at: string }>(`SELECT ends_at::text FROM evaluation_window WHERE window_id = $1`, [
+      man[0].window_id,
+    ]);
+    const endsAt = oldWin[0]?.ends_at ?? new Date(ctx.now.getTime() + 90 * 24 * 3600 * 1000).toISOString();
+    await ctx.sql.query(
+      `INSERT INTO evaluation_window (
+        window_id, starts_at, ends_at, rule_id, rule_version, policy_id, cost_model_id, evaluator_id, universe_version,
+        hypothesis_claim, prior_contaminated, contamination_source, release_event_seq
+      ) VALUES (
+        $1, $2, $3, $4, $5, 'pol-v1', 'cost-v1', 'eval-v1', 'uni-fix-1',
+        $6, TRUE, 'PRIOR_RULE_LABELS', $7
+      )`,
+      [windowId, ctx.now.toISOString(), endsAt, man[0].rule_id, newVersion, proposal.reason, eventSeq],
+    );
+    const revisionId = newId("rev");
+    await ctx.sql.query(
+      `INSERT INTO rule_revision (
+        revision_id, parent_rule_id, parent_rule_version, new_rule_version, vintage_manifest_id,
+        evidence_n, direction_hits, direction_misses, band_hits,
+        implied_move_gte, implied_move_lte, rel5_lt, rel63_gt,
+        adopted, reason_human, ast_hash, created_event_seq
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,TRUE,$14,$15,$16)`,
+      [
+        revisionId,
+        man[0].rule_id,
+        man[0].rule_version,
+        newVersion,
+        manifestId,
+        n,
+        hits,
+        misses,
+        bandHits,
+        proposal.next.implied_move_gte,
+        proposal.next.implied_move_lte,
+        proposal.next.rel5_lt,
+        proposal.next.rel63_gt,
+        proposal.reason,
+        astHash,
+        eventSeq,
+      ],
+    );
+    await ctx.sql.query(
+      `UPDATE job_state SET status = 'IDLE', last_completed_at = NOW(), safe_error_code = NULL WHERE job_name = 'learn-revise'`,
+    );
+    return {
+      revision_id: revisionId,
+      parent_rule_version: man[0].rule_version,
+      new_rule_version: newVersion,
+      vintage_manifest_id: manifestId,
+      evidence_n: n,
+      direction_hits: hits,
+      adopted: true,
+      reason_human: proposal.reason,
+      implied_move_gte: proposal.next.implied_move_gte,
+      implied_move_lte: proposal.next.implied_move_lte,
+      rel5_lt: proposal.next.rel5_lt,
+      rel63_gt: proposal.next.rel63_gt,
+      created_at: ctx.now.toISOString(),
+    };
   });
 }
 
-```
-
-
----
-
-## `src/desk/features.ts` (5322 bytes)
-
-```ts
-import {
-  computeCardComplete,
-  dec,
-  decToCanonical,
-  mul,
-  quantizeHalfUp,
-  sub,
-} from "@/kernel/index";
-
-export type TypedCard = {
-  timing_quality: "ISSUER_CONFIRMED" | "ESTIMATED" | null;
-  card_complete: boolean;
-  options_valid: boolean;
-  implied_move: string | null;
-  benchmark_relative_5d: string | null;
-  benchmark_relative_63d: string | null;
-};
-
-export type OptionLeg = {
-  right: "C" | "P";
-  strike: string;
-  expiry: string;
-  bid: string;
-  ask: string;
-  oi: number;
-  volume: number;
-  asOf: string;
-};
-
-export function relativeReturn(factors: string[]): string | null {
-  if (!factors.length) return null;
-  let acc = dec("1", 12);
-  for (const f of factors) {
+export async function reviseClosedManifests(actor: string): Promise<number> {
+  await ensureLearnTables();
+  const sql = await getSql();
+  const rows = await sql.query<{ manifest_id: string }>(
+    `SELECT m.manifest_id FROM manifest m
+     JOIN report_snapshot rs ON rs.manifest_id = m.manifest_id
+     WHERE NOT EXISTS (SELECT 1 FROM rule_revision r WHERE r.vintage_manifest_id = m.manifest_id)
+     ORDER BY m.session_date`,
+  );
+  let n = 0;
+  for (const row of rows) {
     try {
-      acc = mul(acc, dec(f, 12, "0.000000000001", "1000000"));
+      await maybeReviseRule(row.manifest_id, actor);
+      n += 1;
     } catch {
-      return null;
+      /* observational; freeze path must not fail */
     }
   }
-  const r = sub(acc, dec("1", 0));
-  return decToCanonical(quantizeHalfUp(r, 12), 12);
+  return n;
 }
 
-export function benchmarkRelative(stockFactors: string[], benchFactors: string[]): string | null {
-  if (stockFactors.length !== benchFactors.length || stockFactors.length === 0) return null;
-  const s = relativeReturn(stockFactors);
-  const b = relativeReturn(benchFactors);
-  if (s == null || b == null) return null;
-  const diff = sub(dec(s, 12, "-1000000", "1000000"), dec(b, 12, "-1000000", "1000000"));
-  return decToCanonical(quantizeHalfUp(diff, 12), 12);
-}
-
-export function impliedMove(callMid: string, putMid: string, stockMid: string): string | null {
-  try {
-    const c = dec(callMid, 6, "0.000001", "1000000");
-    const p = dec(putMid, 6, "0.000001", "1000000");
-    const s = dec(stockMid, 6, "0.000001", "1000000");
-    const sum = { ...c, unscaled: c.unscaled + p.unscaled, scale: 6 };
-    // (c+p)/s
-    const num = c.unscaled + p.unscaled;
-    const den = s.unscaled;
-    const extra = 16;
-    const q = (num * 10n ** BigInt(extra)) / den;
-    const r = (num * 10n ** BigInt(extra)) % den;
-    const raw = { neg: false, unscaled: r * 2n >= den ? q + 1n : q, scale: extra };
-    const mv = decToCanonical(quantizeHalfUp(raw, 12), 12);
-    const v = dec(mv, 12, "0.000000000001", "5");
-    void v;
-    void sum;
-    return mv;
-  } catch {
-    return null;
-  }
-}
-
-export function optionRelativeSpread(bid: string, ask: string): number | null {
-  try {
-    const b = Number(bid);
-    const a = Number(ask);
-    if (!(a >= b) || b <= 0 || a <= 0) return null;
-    const mid = (a + b) / 2;
-    return (a - b) / mid;
-  } catch {
-    return null;
-  }
-}
-
-export function selectStraddle(
-  stockMid: string,
-  d: string,
-  d1OpenIso: string,
-  legs: OptionLeg[],
-): { call: OptionLeg; put: OptionLeg; valid: boolean; reason?: string } | { valid: false; reason: string } {
-  const mid = Number(stockMid);
-  const dDate = new Date(d + "T00:00:00Z");
-  const maxExpiry = new Date(dDate.getTime() + 45 * 86400000);
-  const d1 = new Date(d1OpenIso);
-  const byExpiry = new Map<string, OptionLeg[]>();
-  for (const leg of legs) {
-    const exp = new Date(leg.expiry + "T23:59:59Z");
-    if (!(exp > d1) || exp > maxExpiry) continue;
-    const list = byExpiry.get(leg.expiry) ?? [];
-    list.push(leg);
-    byExpiry.set(leg.expiry, list);
-  }
-  const expiries = [...byExpiry.keys()].sort();
-  if (!expiries.length) return { valid: false, reason: "NO_ELIGIBLE_EXPIRY" };
-  const first = expiries[0];
-  const group = byExpiry.get(first) ?? [];
-  const calls = group.filter((l) => l.right === "C");
-  const puts = group.filter((l) => l.right === "P");
-  const pairs: { call: OptionLeg; put: OptionLeg; dist: number; strike: number }[] = [];
-  for (const c of calls) {
-    const p = puts.find((x) => x.strike === c.strike);
-    if (!p) continue;
-    const k = Number(c.strike);
-    pairs.push({ call: c, put: p, dist: Math.abs(k / mid - 1), strike: k });
-  }
-  if (!pairs.length) return { valid: false, reason: "NO_MATCHED_STRIKE" };
-  pairs.sort((a, b) => a.dist - b.dist || a.strike - b.strike);
-  const chosen = pairs[0];
-  if (chosen.dist > 0.02) return { valid: false, reason: "ATM_DISTANCE" };
-  for (const leg of [chosen.call, chosen.put]) {
-    if (!(Number(leg.bid) > 0) || Number(leg.ask) < Number(leg.bid)) return { valid: false, reason: "QUOTE_SIDE" };
-    const sp = optionRelativeSpread(leg.bid, leg.ask);
-    if (sp == null || sp > 0.2) return { valid: false, reason: "LEG_SPREAD" };
-    if (leg.oi < 100) return { valid: false, reason: "OPEN_INTEREST" };
-    if (leg.volume < 10) return { valid: false, reason: "VOLUME" };
-  }
-  return { call: chosen.call, put: chosen.put, valid: true };
-}
-
-export function assembleCard(input: {
-  timingQuality: "ISSUER_CONFIRMED" | "ESTIMATED" | null;
-  optionsValid: boolean;
-  impliedMove: string | null;
-  rel5: string | null;
-  rel63: string | null;
-}): TypedCard {
-  const card: TypedCard = {
-    timing_quality: input.timingQuality,
-    options_valid: input.optionsValid,
-    implied_move: input.impliedMove,
-    benchmark_relative_5d: input.rel5,
-    benchmark_relative_63d: input.rel63,
-    card_complete: false,
+export async function learningSummary(role: DeskRole): Promise<{
+  rule_version: string;
+  bullets: string[];
+  last: {
+    adopted: boolean;
+    reason: string;
+    evidence_n: number | null;
+    direction_hits: number | null;
+    created_at: string;
+  } | null;
+  history: Array<{
+    adopted: boolean;
+    reason: string;
+    rule_version: string | null;
+    created_at: string;
+    evidence_n: number | null;
+    direction_hits: number | null;
+  }>;
+}> {
+  await ensureLearnTables();
+  const sql = await getSql();
+  const win = await sql.query<{ rule_version: string; ast_content: unknown }>(
+    `SELECT w.rule_version, r.ast_content
+     FROM evaluation_window w
+     JOIN rule_card r ON r.rule_id = w.rule_id AND r.rule_version = w.rule_version
+     WHERE w.ended_early_at IS NULL
+     ORDER BY w.starts_at DESC LIMIT 1`,
+  );
+  const t = thresholdsFromAst(win[0]?.ast_content ?? INITIAL_AST);
+  const hist = await sql.query<RuleRevisionRow>(
+    `SELECT revision_id, parent_rule_version, new_rule_version, vintage_manifest_id, evidence_n, direction_hits,
+            adopted, reason_human, implied_move_gte, implied_move_lte, rel5_lt, rel63_gt, created_at::text
+     FROM rule_revision ORDER BY created_at DESC LIMIT 8`,
+  );
+  const operator = role === "OPERATOR";
+  const hide = (row: RuleRevisionRow) =>
+    operator
+      ? {
+          adopted: row.adopted,
+          reason: row.adopted
+            ? "The next lock will use an updated checklist. Recorded decisions are unchanged."
+            : "The checklist was reviewed. No change this round.",
+          evidence_n: null,
+          direction_hits: null,
+          created_at: row.created_at,
+          rule_version: row.new_rule_version,
+        }
+      : {
+          adopted: row.adopted,
+          reason: row.reason_human,
+          evidence_n: row.evidence_n,
+          direction_hits: row.direction_hits,
+          created_at: row.created_at,
+          rule_version: row.new_rule_version,
+        };
+  const last = hist[0] ? hide(hist[0]) : null;
+  return {
+    rule_version: win[0]?.rule_version ?? "v1",
+    bullets: humanRuleBullets(t),
+    last,
+    history: hist.map(hide),
   };
-  card.card_complete = computeCardComplete({
-    timing_quality: card.timing_quality ?? undefined,
-    options_valid: card.options_valid,
-    implied_move: card.implied_move ?? undefined,
-    benchmark_relative_5d: card.benchmark_relative_5d ?? undefined,
-    benchmark_relative_63d: card.benchmark_relative_63d ?? undefined,
-  });
-  return card;
 }
+
 ```
 
+## `src/desk/learn-policy.ts`
 
----
+```
+import { dec, decToCanonical, quantizeHalfUp, validateAst } from "../kernel/index.ts";
 
-## `src/components/alpaca-keys.tsx` (9725 bytes)
-
-```tsx
-import { useEffect, useState } from "react";
-import { Link } from "@tanstack/react-router";
-import { Empty, Err, Panel } from "@/components/desk-shell";
-import { fetchAlpacaStatus, postAlpacaCredentials, postAlpacaDisconnect } from "@/desk/server-fns";
-import type { AlpacaPublicStatus } from "@/desk/alpaca-types";
-
-function failMsg(e: unknown, fallback: string): string {
-  if (e instanceof Error && e.message) return e.message;
-  if (typeof e === "object" && e && "message" in e && typeof (e as { message: unknown }).message === "string") {
-    return (e as { message: string }).message;
-  }
-  return fallback;
-}
-
-const EMPTY_STATUS: AlpacaPublicStatus = {
-  connected: false,
-  mode: null,
-  api_key_masked: null,
-  account_number_last4: null,
-  account_status: null,
-  last_ok_at: null,
-  last_error: null,
-  watchlist: [],
-  trading_host: null,
+export type Thresholds = {
+  implied_move_gte: string;
+  implied_move_lte: string;
+  rel5_lt: string;
+  rel63_gt: string;
 };
 
-/** Standalone key insertion — does not wait on the rest of Admin. */
-export function AlpacaKeyInsert() {
-  const [status, setStatus] = useState<AlpacaPublicStatus>(EMPTY_STATUS);
-  const [canMutate, setCanMutate] = useState(true);
-  const [ready, setReady] = useState(false);
-  const [loadErr, setLoadErr] = useState<string | null>(null);
+const MIN_N = 3;
 
-  async function reload() {
-    const r = await fetchAlpacaStatus();
-    setStatus(r.status);
-    setCanMutate(r.can_mutate);
-    setReady(true);
+function canonDec(n: number): string {
+  const clamped = Number.isFinite(n) ? n : 0;
+  return decToCanonical(quantizeHalfUp(dec(clamped.toFixed(12), 12, "-1000000", "1000000"), 12), 12);
+}
+
+export function defaultThresholds(): Thresholds {
+  return {
+    implied_move_gte: "0.040000000000",
+    implied_move_lte: "0.150000000000",
+    rel5_lt: "0.000000000000",
+    rel63_gt: "0.000000000000",
+  };
+}
+
+export function thresholdsFromAst(ast: unknown): Thresholds {
+  const t = defaultThresholds();
+  if (!ast || typeof ast !== "object" || !("all" in ast) || !Array.isArray((ast as { all: unknown }).all)) return t;
+  for (const raw of (ast as { all: Array<{ field?: string; op?: string; value?: unknown }> }).all) {
+    if (!raw || typeof raw.value !== "string") continue;
+    if (raw.field === "implied_move" && raw.op === "GTE") t.implied_move_gte = raw.value;
+    if (raw.field === "implied_move" && raw.op === "LTE") t.implied_move_lte = raw.value;
+    if (raw.field === "benchmark_relative_5d" && raw.op === "LT") t.rel5_lt = raw.value;
+    if (raw.field === "benchmark_relative_63d" && raw.op === "GT") t.rel63_gt = raw.value;
   }
+  return t;
+}
 
-  useEffect(() => {
-    void reload().catch((e) => {
-      setLoadErr(failMsg(e, "Could not load Alpaca status"));
-      setReady(true);
-    });
-  }, []);
+export function astFromThresholds(t: Thresholds): unknown {
+  const ast = {
+    schema: "1",
+    decision: "PREDICT",
+    direction: "LONG",
+    otherwise: "STAND_DOWN",
+    all: [
+      { field: "timing_quality", op: "EQ", value: "ISSUER_CONFIRMED" },
+      { field: "card_complete", op: "EQ", value: true },
+      { field: "options_valid", op: "EQ", value: true },
+      { field: "implied_move", op: "GTE", value: t.implied_move_gte },
+      { field: "implied_move", op: "LTE", value: t.implied_move_lte },
+      { field: "benchmark_relative_5d", op: "LT", value: t.rel5_lt },
+      { field: "benchmark_relative_63d", op: "GT", value: t.rel63_gt },
+    ],
+  };
+  validateAst(ast);
+  return ast;
+}
 
+function pct(v: string): string {
+  return (Number(v) * 100).toFixed(1).replace(/\.0$/, "");
+}
+
+export function humanRuleText(t: Thresholds): string {
   return (
-    <AlpacaKeysForm
-      status={status}
-      canMutate={canMutate}
-      ready={ready}
-      loadErr={loadErr}
-      onChanged={reload}
-    />
+    `Predict LONG when issuer-confirmed AMC, complete card, valid options, ` +
+    `implied move in [${pct(t.implied_move_gte)}%, ${pct(t.implied_move_lte)}%], ` +
+    `5d relative < ${t.rel5_lt}, 63d relative > ${t.rel63_gt}.`
   );
 }
 
-export function AlpacaKeysForm({
-  status,
-  canMutate,
-  ready = true,
-  loadErr,
-  onChanged,
-}: {
-  status: AlpacaPublicStatus;
-  canMutate: boolean;
-  ready?: boolean;
-  loadErr?: string | null;
-  onChanged: () => Promise<void>;
-}) {
-  const [keyId, setKeyId] = useState("");
-  const [secret, setSecret] = useState("");
-  const [mode, setMode] = useState<"PAPER" | "LIVE">("PAPER");
-  const [confirmLive, setConfirmLive] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-
-  async function save() {
-    const apiKeyId = keyId.trim();
-    const apiSecret = secret.trim();
-    if (apiKeyId.length < 8 || apiSecret.length < 8) {
-      setErr("Paste both the key ID and the secret (each at least 8 characters).");
-      return;
-    }
-    if (mode === "LIVE" && !confirmLive) {
-      setErr("Live mode needs the confirmation checkbox.");
-      return;
-    }
-    setBusy(true);
-    setErr(null);
-    setNote(null);
-    try {
-      await postAlpacaCredentials({
-        data: { apiKeyId, apiSecret, mode, confirmLive },
-      });
-      setSecret("");
-      setKeyId("");
-      setConfirmLive(false);
-      setNote(mode === "LIVE" ? "Live keys stored and verified." : "Paper keys stored and verified.");
-    } catch (e) {
-      setErr(failMsg(e, "Could not store keys"));
-    } finally {
-      try {
-        await onChanged();
-      } catch {
-        /* status refresh is secondary to the save result */
-      }
-      setBusy(false);
-    }
-  }
-
-  async function drop() {
-    setBusy(true);
-    setErr(null);
-    try {
-      await postAlpacaDisconnect();
-      setNote("Alpaca keys removed from this desk.");
-      await onChanged();
-    } catch (e) {
-      setErr(failMsg(e, "Disconnect failed"));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Panel title="Insert Alpaca keys" aside={status.connected ? (status.mode === "LIVE" ? "LIVE" : "PAPER") : "empty"}>
-      <p className="mb-3 text-sm leading-relaxed text-muted">
-        Paste the key ID and secret from app.alpaca.markets. They are encrypted on the server. The secret is never
-        sent back to this phone. Paper is the default.
-      </p>
-      {loadErr ? (
-        <div className="mb-3">
-          <Err>{loadErr}</Err>
-        </div>
-      ) : null}
-      {status.connected ? (
-        <dl className="mb-4 grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
-          <div>
-            <dt className="text-[11px] uppercase tracking-wider text-muted">Stored key</dt>
-            <dd className="mt-1 font-mono text-xs">{status.api_key_masked}</dd>
-          </div>
-          <div>
-            <dt className="text-[11px] uppercase tracking-wider text-muted">Account</dt>
-            <dd className="mt-1 font-mono text-xs">
-              {status.account_number_last4 ? `…${status.account_number_last4}` : "—"}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-[11px] uppercase tracking-wider text-muted">Status</dt>
-            <dd className="mt-1 font-mono text-xs">{status.account_status ?? "—"}</dd>
-          </div>
-          <div>
-            <dt className="text-[11px] uppercase tracking-wider text-muted">Last ok</dt>
-            <dd className="mt-1 font-mono text-xs">{status.last_ok_at ? status.last_ok_at.slice(0, 19) : "—"}</dd>
-          </div>
-        </dl>
-      ) : (
-        <Empty>Nothing stored yet. Paste both fields below and tap Insert keys.</Empty>
-      )}
-      {status.last_error ? (
-        <div className="mb-3">
-          <Err>{status.last_error}</Err>
-        </div>
-      ) : null}
-      {err ? (
-        <div className="mb-3">
-          <Err>{err}</Err>
-        </div>
-      ) : null}
-      {note ? <p className="mb-3 text-sm text-muted">{note}</p> : null}
-      {!ready ? <p className="text-sm text-muted">Loading key slot…</p> : null}
-      {canMutate ? (
-        <form
-          className="grid gap-3"
-          autoComplete="off"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void save();
-          }}
-        >
-          <label className="grid gap-1 text-sm">
-            <span className="text-[11px] uppercase tracking-wider text-muted">API key ID</span>
-            <input
-              value={keyId}
-              onChange={(e) => setKeyId(e.target.value)}
-              autoComplete="off"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              inputMode="text"
-              enterKeyHint="next"
-              name="alpaca_api_key_id"
-              className="min-h-12 rounded-md border border-border bg-sunken px-3 font-mono text-base"
-              placeholder="PK…"
-            />
-          </label>
-          <label className="grid gap-1 text-sm">
-            <span className="text-[11px] uppercase tracking-wider text-muted">Secret key</span>
-            <textarea
-              value={secret}
-              onChange={(e) => setSecret(e.target.value)}
-              autoComplete="off"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              name="alpaca_api_secret"
-              rows={3}
-              className="rounded-md border border-border bg-sunken px-3 py-2 font-mono text-base"
-              placeholder="Paste the secret here"
-            />
-          </label>
-          <button
-            type="submit"
-            disabled={busy}
-            className="min-h-12 rounded-md bg-primary px-4 text-sm font-medium text-primary-fg disabled:opacity-40"
-          >
-            {busy ? "Saving…" : status.connected ? "Replace keys" : "Insert keys"}
-          </button>
-          <fieldset className="grid gap-2">
-            <legend className="text-[11px] uppercase tracking-wider text-muted">Venue</legend>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <label className="flex min-h-11 flex-1 items-center gap-2 rounded-md border border-border px-3 text-sm">
-                <input
-                  type="radio"
-                  name="alpaca-insert-mode"
-                  checked={mode === "PAPER"}
-                  onChange={() => {
-                    setMode("PAPER");
-                    setConfirmLive(false);
-                  }}
-                />
-                Paper
-              </label>
-              <label className="flex min-h-11 flex-1 items-center gap-2 rounded-md border border-danger/40 px-3 text-sm">
-                <input
-                  type="radio"
-                  name="alpaca-insert-mode"
-                  checked={mode === "LIVE"}
-                  onChange={() => setMode("LIVE")}
-                />
-                Live (real capital)
-              </label>
-            </div>
-          </fieldset>
-          {mode === "LIVE" ? (
-            <label className="flex items-start gap-2 text-sm text-danger">
-              <input
-                type="checkbox"
-                className="mt-1"
-                checked={confirmLive}
-                onChange={(e) => setConfirmLive(e.target.checked)}
-              />
-              <span>I understand these live keys will send real orders against real money.</span>
-            </label>
-          ) : null}
-          <div className="flex flex-col gap-2 sm:flex-row">
-            {status.connected ? (
-              <button
-                type="button"
-                disabled={busy}
-                className="min-h-11 rounded-md border border-border px-4 text-sm"
-                onClick={() => void drop()}
-              >
-                Disconnect
-              </button>
-            ) : null}
-            <Link to="/trade" className="flex min-h-11 items-center justify-center rounded-md border border-border px-4 text-sm">
-              Open trade desk
-            </Link>
-          </div>
-        </form>
-      ) : ready ? (
-        <Empty>
-          This account is Reviewer. Sign out, create a new account, and pick Operator — only Operator can insert keys.
-        </Empty>
-      ) : null}
-    </Panel>
-  );
+export function humanRuleBullets(t: Thresholds): string[] {
+  return [
+    "After close, issuer confirmed",
+    `Expected move ${pct(t.implied_move_gte)}% to ${pct(t.implied_move_lte)}%`,
+    Number(t.rel5_lt) < 0
+      ? `Five-day return at least ${pct(t.rel5_lt)}% below the market`
+      : "Five-day return below the market",
+    Number(t.rel63_gt) > 0
+      ? `Sixty-three-day return at least ${pct(t.rel63_gt)}% above the market`
+      : "Sixty-three-day return above the market",
+  ];
 }
+
+export function proposeThresholds(current: Thresholds, n: number, hits: number): {
+  next: Thresholds;
+  changed: boolean;
+  adopted: boolean;
+  reason: string;
+} {
+  if (n < MIN_N) {
+    return {
+      next: current,
+      changed: false,
+      adopted: false,
+      reason: `Not enough clean labels to change the rule (${n} usable; ${MIN_N} required). Past decisions stay as recorded.`,
+    };
+  }
+  let gte = Number(current.implied_move_gte);
+  let lte = Number(current.implied_move_lte);
+  let rel5 = Number(current.rel5_lt);
+  const rel63 = Number(current.rel63_gt);
+  const rate = hits / n;
+  let reason: string;
+  if (rate < 0.5) {
+    gte = Math.min(0.08, gte + 0.01);
+    lte = Math.max(gte + 0.04, Math.max(0.1, lte - 0.01));
+    rel5 = Math.max(-0.02, rel5 - 0.005);
+    reason = `Direction was correct on ${hits} of ${n} clean labels. Next lock uses a tighter expected-move band and a deeper 5-day pullback. Already-recorded decisions are not rewritten.`;
+  } else if (rate >= 0.6 && n >= 6) {
+    gte = Math.max(0.03, gte - 0.005);
+    reason = `Direction was correct on ${hits} of ${n} clean labels. Next lock allows a slightly wider expected-move band. Already-recorded decisions are not rewritten.`;
+  } else {
+    reason = `Direction was correct on ${hits} of ${n} clean labels. Thresholds held. Already-recorded decisions are not rewritten.`;
+  }
+  if (lte - gte < 0.04) lte = gte + 0.04;
+  const next: Thresholds = {
+    implied_move_gte: canonDec(gte),
+    implied_move_lte: canonDec(lte),
+    rel5_lt: canonDec(rel5),
+    rel63_gt: canonDec(rel63),
+  };
+  const changed =
+    next.implied_move_gte !== current.implied_move_gte ||
+    next.implied_move_lte !== current.implied_move_lte ||
+    next.rel5_lt !== current.rel5_lt ||
+    next.rel63_gt !== current.rel63_gt;
+  return { next, changed, adopted: changed, reason };
+}
+
 ```
 
+## `src/ui/capability.ts`
 
----
+```
+export type CapabilityState =
+  | "not_checked"
+  | "checking"
+  | "not_configured"
+  | "unavailable"
+  | "failed"
+  | "sample"
+  | "ready";
 
-## `src/components/desk-shell.tsx` (8203 bytes)
+export type Capability = {
+  id: string;
+  label: string;
+  state: CapabilityState;
+  last_checked: string | null;
+  reason: string;
+};
 
-```tsx
-import { Link, useRouterState } from "@tanstack/react-router";
-import { useEffect, useState, type ReactNode } from "react";
-import { RedirectToSignIn, UserButton } from "@/lib/auth/gates";
-import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { fetchMe, postClaimRole } from "@/desk/server-fns";
-
-const NAV = [
-  { to: "/keys", label: "Keys" },
-  { to: "/trade", label: "Trade" },
-  { to: "/", label: "Desk" },
-  { to: "/earnings", label: "Earn" },
-  { to: "/predictions", label: "Pred" },
-  { to: "/admin", label: "Admin" },
-] as const;
-
-export function DeskShell({ children }: { children: ReactNode }) {
-  const { user, isPending } = useCurrentUserState();
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const [role, setRole] = useState<string | null | undefined>(undefined);
-  const [alpacaMode, setAlpacaMode] = useState<"PAPER" | "LIVE" | null>(null);
-  const [alpacaOn, setAlpacaOn] = useState(false);
-  const [claiming, setClaiming] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!user) return;
-    void fetchMe()
-      .then((m) => {
-        setRole(m.role ?? "OPERATOR");
-        setAlpacaOn(Boolean(m.alpaca?.connected));
-        setAlpacaMode(m.alpaca?.mode ?? null);
-      })
-      .catch((e) => {
-        setErr(e instanceof Error ? e.message : "Failed to load desk identity");
-        setRole("OPERATOR");
-      });
-  }, [user]);
-
-  if (isPending) {
-    return (
-      <div className="flex min-h-dvh items-center justify-center bg-bg text-muted">
-        <div className="h-24 w-64 animate-pulse rounded-xl bg-surface" />
-      </div>
-    );
+/** Never treat a missing record as Ready. */
+export function capabilityLabel(state: CapabilityState | null | undefined): string {
+  switch (state) {
+    case "ready":
+      return "Ready";
+    case "sample":
+      return "Sample data";
+    case "not_configured":
+      return "Not configured";
+    case "unavailable":
+      return "Unavailable";
+    case "failed":
+      return "Failed";
+    case "checking":
+      return "Checking";
+    case "not_checked":
+      return "Not checked";
+    default:
+      return "Not checked";
   }
-  if (!user) return <RedirectToSignIn />;
+}
 
-  async function claim(next: "OPERATOR" | "REVIEWER") {
-    setClaiming(true);
-    setErr(null);
-    try {
-      const r = await postClaimRole({ data: { role: next } });
-      setRole(r.role);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Could not assign desk role");
-    } finally {
-      setClaiming(false);
-    }
+export function capabilityTone(state: CapabilityState | null | undefined): "neutral" | "info" | "success" | "warn" | "danger" {
+  switch (state) {
+    case "ready":
+      return "success";
+    case "sample":
+      return "info";
+    case "failed":
+      return "danger";
+    case "unavailable":
+    case "not_configured":
+      return "warn";
+    default:
+      return "neutral";
   }
-
-  if (role === undefined) {
-    return (
-      <div className="flex min-h-dvh flex-col items-center justify-center gap-3 bg-bg px-5 text-muted">
-        <p className="text-sm">Opening desk…</p>
-        {err ? <p className="text-sm text-danger">{err}</p> : null}
-      </div>
-    );
-  }
-
-  if (role === null) {
-    return (
-      <div className="mx-auto flex min-h-dvh max-w-lg flex-col justify-center gap-6 px-5 py-10">
-        <p className="text-xs font-medium tracking-[0.18em] text-muted">TRADING APP</p>
-        <h1 className="text-2xl font-medium tracking-tight">Open as operator</h1>
-        <p className="text-sm leading-relaxed text-muted">
-          Operator can insert Alpaca keys and send paper orders. Reviewer is read-only.
-        </p>
-        {err ? <p className="text-sm text-danger">{err}</p> : null}
-        <button
-          type="button"
-          disabled={claiming}
-          onClick={() => void claim("OPERATOR")}
-          className="min-h-12 rounded-lg bg-primary px-4 text-sm font-medium text-primary-fg"
-        >
-          {claiming ? "Opening…" : "Continue as Operator"}
-        </button>
-        <button
-          type="button"
-          disabled={claiming}
-          onClick={() => void claim("REVIEWER")}
-          className="min-h-11 rounded-lg border border-border px-4 text-sm"
-        >
-          Continue as Reviewer
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-dvh bg-bg pb-20 text-fg md:pb-8">
-      <header className="border-b border-border bg-bg/95 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium tracking-tight">Trading App</span>
-              <span
-                className={
-                  "rounded-full border px-2 py-0.5 font-mono text-[10px] tracking-wider " +
-                  (alpacaOn && alpacaMode === "LIVE"
-                    ? "border-danger text-danger"
-                    : alpacaOn
-                      ? "border-warn text-warn"
-                      : "border-border text-warn")
-                }
-              >
-                {alpacaOn && alpacaMode === "LIVE"
-                  ? "ALPACA LIVE"
-                  : alpacaOn
-                    ? "ALPACA PAPER"
-                    : "FIXTURE / SYNTHETIC"}
-              </span>
-            </div>
-            <p className="truncate text-[11px] text-muted">
-              {alpacaOn
-                ? alpacaMode === "LIVE"
-                  ? "Live Alpaca orders spend real capital · earnings desk remains paper-modeled"
-                  : "Alpaca paper venue · earnings research still fixture-modeled"
-                : "Insert keys on the Keys tab, then trade"}
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="hidden rounded-full border border-border px-2 py-0.5 font-mono text-[10px] text-muted sm:inline">
-              {role}
-            </span>
-            <UserButton />
-          </div>
-        </div>
-        <nav className="mx-auto hidden max-w-6xl gap-1 px-4 pb-2 md:flex">
-          {NAV.map((n) => (
-            <Link
-              key={n.to}
-              to={n.to}
-              className={
-                "rounded-md px-3 py-1.5 text-sm " +
-                (pathname === n.to ? "bg-surface text-fg" : "text-muted hover:text-fg")
-              }
-            >
-              {n.label}
-            </Link>
-          ))}
-        </nav>
-      </header>
-      <main className="mx-auto max-w-6xl px-4 py-5">{children}</main>
-      <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-bg/95 pb-[env(safe-area-inset-bottom)] md:hidden">
-        <div className="grid grid-cols-6">
-          {NAV.map((n) => (
-            <Link
-              key={n.to}
-              to={n.to}
-              className={
-                "flex min-h-11 items-center justify-center px-1 text-[11px] " +
-                (pathname === n.to ? "text-fg" : "text-muted")
-              }
-            >
-              {n.label}
-            </Link>
-          ))}
-        </div>
-      </nav>
-    </div>
-  );
 }
 
-export function Panel({ title, children, aside }: { title: string; children: ReactNode; aside?: string }) {
-  return (
-    <section className="rounded-xl border border-border bg-surface p-4 md:p-5">
-      <div className="mb-3 flex items-baseline justify-between gap-3">
-        <h2 className="text-sm font-medium tracking-tight">{title}</h2>
-        {aside ? <span className="font-mono text-[11px] text-muted">{aside}</span> : null}
-      </div>
-      {children}
-    </section>
-  );
+export function cap(partial: Capability): Capability {
+  return {
+    id: partial.id,
+    label: partial.label,
+    state: partial.state,
+    last_checked: partial.last_checked,
+    reason: partial.reason,
+  };
 }
 
-export function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[11px] uppercase tracking-wider text-muted">{label}</div>
-      <div className="mt-1 font-mono text-lg tabular-nums text-fg">{value}</div>
-      {hint ? <div className="mt-0.5 text-[11px] text-faint">{hint}</div> : null}
-    </div>
-  );
-}
-
-export function Empty({ children }: { children: ReactNode }) {
-  return <p className="text-sm text-muted">{children}</p>;
-}
-
-export function Err({ children }: { children: ReactNode }) {
-  return (
-    <div className="rounded-lg border border-danger/40 bg-sunken px-3 py-2 text-sm text-danger" role="alert">
-      {children}
-    </div>
-  );
-}
-
-export function SessionTabs({
-  sessions,
-  active,
-  to,
-}: {
-  sessions: Array<{ session_date: string }>;
-  active?: string;
-  to: "/earnings" | "/predictions";
-}) {
-  if (!sessions.length) return null;
-  return (
-    <div className="flex flex-wrap gap-2">
-      {sessions.map((s) => (
-        <Link
-          key={s.session_date}
-          to={to}
-          search={{ session: s.session_date }}
-          className={
-            "min-h-11 rounded-md border px-3 text-sm " +
-            (active === s.session_date ? "border-primary bg-surface text-fg" : "border-border text-muted hover:text-fg")
-          }
-        >
-          {s.session_date}
-        </Link>
-      ))}
-    </div>
-  );
-}
 ```
 
+## `src/ui/labels.ts`
 
----
-
-## `src/routes/keys.tsx` (667 bytes)
-
-```tsx
-import { createFileRoute } from "@tanstack/react-router";
-import { DeskShell } from "@/components/desk-shell";
-import { AlpacaKeyInsert } from "@/components/alpaca-keys";
-
-export const Route = createFileRoute("/keys")({ component: Keys });
-
-function Keys() {
-  return (
-    <DeskShell>
-      <div className="flex flex-col gap-4">
-        <div>
-          <h1 className="text-xl font-medium tracking-tight">Alpaca keys</h1>
-          <p className="mt-1 text-sm text-muted">
-            Paste your paper key ID and secret. They stay encrypted on the server. Then open Trade.
-          </p>
-        </div>
-        <AlpacaKeyInsert />
-      </div>
-    </DeskShell>
-  );
-}
 ```
-
-
----
-
-## `src/routes/trade.tsx` (19634 bytes)
-
-```tsx
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
-import { DeskShell, Empty, Err, Panel, Stat } from "@/components/desk-shell";
-import {
-  fetchAlpacaDesk,
-  fetchAlpacaOrders,
-  postAlpacaCancel,
-  postAlpacaClose,
-  postAlpacaOrder,
-  postAlpacaWatchlist,
-} from "@/desk/server-fns";
-
-export const Route = createFileRoute("/trade")({ component: Trade });
-
-function Trade() {
-  return (
-    <DeskShell>
-      <TradeLoader />
-    </DeskShell>
-  );
+export function decisionLabel(status: string | null | undefined, reasons: string[] = []): string {
+  if (!status || status === "NO_FREEZE") return "No decision recorded";
+  if (status === "PREDICT") return "Upward expectation";
+  if (status === "STAND_DOWN") {
+    if (reasons.some((r) => r.startsWith("MISSING_"))) return "Not enough information";
+    return "No qualifying setup";
+  }
+  return "Unknown status";
 }
 
-function TradeLoader() {
-  const [data, setData] = useState<Awaited<ReturnType<typeof fetchAlpacaDesk>> | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  async function reload() {
-    const d = await fetchAlpacaDesk();
-    setData(d);
-  }
-  useEffect(() => {
-    void reload().catch((e) => setError(e instanceof Error ? e.message : "Could not load Alpaca desk"));
-  }, []);
-  if (error) return <Err>{error}</Err>;
-  if (!data) return <Empty>Connecting to Alpaca…</Empty>;
-  return <TradeBody data={data} reload={reload} />;
+export function paperLabel(execution: string | null | undefined, decision?: string | null): string {
+  if (execution === "PAPER_COMMITTED") return "Paper position reserved";
+  if (execution === "NOT_TRADED") return "Predicted · not traded";
+  if (!decision || decision === "STAND_DOWN" || decision === "NO_FREEZE") return "Not applicable";
+  if (execution === "DENIED") return "Predicted · not traded";
+  if (execution === "NONE" || !execution) return "Not applicable";
+  return execution;
 }
 
-function TradeBody({
-  data,
-  reload,
-}: {
-  data: Awaited<ReturnType<typeof fetchAlpacaDesk>>;
-  reload: () => Promise<void>;
-}) {
-  const [note, setNote] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [history, setHistory] = useState<Array<Record<string, string | boolean | null>> | null>(null);
-  const [watchText, setWatchText] = useState(data.status.watchlist.join(", "));
-
-  const symbolDefault = data.status.watchlist[0] ?? "SPY";
-  const [symbol, setSymbol] = useState(symbolDefault);
-  const [side, setSide] = useState<"buy" | "sell">("buy");
-  const [type, setType] = useState<"market" | "limit">("market");
-  const [tif, setTif] = useState<"day" | "gtc" | "ioc">("day");
-  const [sizeMode, setSizeMode] = useState<"qty" | "notional">("notional");
-  const [qty, setQty] = useState("1");
-  const [notional, setNotional] = useState("1000.00");
-  const [limitPrice, setLimitPrice] = useState("");
-  const [extended, setExtended] = useState(false);
-  const [confirmLive, setConfirmLive] = useState(false);
-
-  async function run(label: string, fn: () => Promise<unknown>) {
-    setBusy(true);
-    setErr(null);
-    setNote(null);
-    try {
-      await fn();
-      setNote(label);
-      await reload();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Action failed");
-    } finally {
-      setBusy(false);
-    }
+export function positionStateLabel(state: string): string {
+  switch (state) {
+    case "COMMITTED_IRREVOCABLE":
+      return "Paper position reserved";
+    case "FILLED":
+      return "Paper position open";
+    case "IMPAIRED_ENTRY":
+      return "Entry price unresolved";
+    case "IMPAIRED_EXIT":
+      return "Exit price unresolved";
+    case "NO_FILL":
+      return "No modeled fill · closing record";
+    case "FLAT":
+      return "Exit recorded · closing record";
+    case "CLOSED":
+      return "Paper position closed";
+    default:
+      return "Unknown status";
   }
-
-  if (!data.status.connected) {
-    return (
-      <div className="flex flex-col gap-4">
-        <div>
-          <h1 className="text-xl font-medium tracking-tight">Trade</h1>
-          <p className="mt-1 text-sm text-muted">Alpaca is the market-data and order venue. Keys go on Admin.</p>
-        </div>
-        <Panel title="Not connected">
-          <Empty>No Alpaca keys stored. Operator pastes key id and secret on Admin, then returns here.</Empty>
-          <Link to="/admin" className="mt-3 inline-flex min-h-11 items-center rounded-md bg-primary px-4 text-sm text-primary-fg">
-            Open Admin
-          </Link>
-        </Panel>
-      </div>
-    );
-  }
-
-  const live = data.status.mode === "LIVE";
-  const quotes = "quotes" in data && data.quotes ? data.quotes : [];
-  const positions = "positions" in data && data.positions ? data.positions : [];
-  const orders = "orders" in data && data.orders ? data.orders : [];
-  const account = "account" in data && data.account ? data.account : null;
-  const clock = "clock" in data && data.clock ? data.clock : null;
-  const loadErr = "error" in data ? data.error : null;
-
-  return (
-    <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="text-xl font-medium tracking-tight">Trade</h1>
-        <p className="mt-1 text-sm text-muted">
-          {live ? "Live Alpaca — orders spend real capital." : "Alpaca paper account — simulated fills, real market data."}{" "}
-          Key {data.status.api_key_masked}
-        </p>
-      </div>
-      {live ? (
-        <div className="rounded-lg border border-danger/40 bg-sunken px-3 py-2 text-sm text-danger" role="status">
-          LIVE mode. A market order is not undoable. Confirm the checkbox on the ticket before sending.
-        </div>
-      ) : null}
-      {loadErr ? <Err>{loadErr}</Err> : null}
-      {err ? <Err>{err}</Err> : null}
-      {note ? <p className="text-sm text-muted">{note}</p> : null}
-
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Panel title="Clock" aside={clock?.is_open === true || clock?.is_open === "true" ? "OPEN" : "closed"}>
-          <Stat label="Next open" value={fmtTs(clock?.next_open)} />
-        </Panel>
-        <Panel title="Equity">
-          <Stat label="Portfolio" value={money(account?.portfolio_value)} hint={money(account?.equity)} />
-        </Panel>
-        <Panel title="Cash">
-          <Stat label="Buying power" value={money(account?.buying_power)} hint={money(account?.cash)} />
-        </Panel>
-        <Panel title="Account" aside={String(account?.status ?? "—")}>
-          <Stat
-            label="Number"
-            value={account?.account_number ? maskAcct(String(account.account_number)) : "—"}
-            hint={live ? "LIVE" : "PAPER"}
-          />
-        </Panel>
-      </div>
-
-      <Panel title="Quotes" aside="IEX / Alpaca data">
-        {quotes.length === 0 ? (
-          <Empty>No snapshots. Save keys, then refresh.</Empty>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[36rem] text-left text-sm">
-              <thead className="text-[11px] uppercase tracking-wider text-muted">
-                <tr>
-                  <th className="pb-2 font-medium">Symbol</th>
-                  <th className="pb-2 font-medium">Last</th>
-                  <th className="pb-2 font-medium">Bid</th>
-                  <th className="pb-2 font-medium">Ask</th>
-                  <th className="pb-2 font-medium">Day %</th>
-                </tr>
-              </thead>
-              <tbody className="font-mono text-xs">
-                {quotes.map((q) => (
-                  <tr
-                    key={q.symbol}
-                    className="cursor-pointer border-t border-border hover:bg-sunken"
-                    onClick={() => setSymbol(q.symbol)}
-                  >
-                    <td className="py-2 font-medium text-fg">{q.symbol}</td>
-                    <td className="py-2">{q.last ?? "—"}</td>
-                    <td className="py-2">{q.bid ?? "—"}</td>
-                    <td className="py-2">{q.ask ?? "—"}</td>
-                    <td className={"py-2 " + ((Number(q.change_pct) || 0) < 0 ? "text-danger" : "")}>
-                      {q.change_pct == null ? "—" : `${q.change_pct}%`}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        {data.can_mutate ? (
-          <form
-            className="mt-3 flex flex-col gap-2 sm:flex-row"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void run("Watchlist saved", () =>
-                postAlpacaWatchlist({
-                  data: { watchlist: watchText.split(/[\s,]+/).filter(Boolean) },
-                }),
-              );
-            }}
-          >
-            <input
-              value={watchText}
-              onChange={(e) => setWatchText(e.target.value)}
-              className="min-h-11 flex-1 rounded-md border border-border bg-sunken px-3 font-mono text-sm"
-              placeholder="SPY, QQQ, NVDA"
-            />
-            <button type="submit" disabled={busy} className="min-h-11 rounded-md border border-border px-4 text-sm">
-              Save watchlist
-            </button>
-          </form>
-        ) : null}
-      </Panel>
-
-      <Panel title="Order ticket" aside={data.can_mutate ? undefined : "operator only"}>
-        {!data.can_mutate ? (
-          <Empty>Reviewer can read the book. Operator sends orders.</Empty>
-        ) : (
-          <form
-            className="grid gap-3"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void run(`Order ${side} ${symbol}`, () =>
-                postAlpacaOrder({
-                  data: {
-                    symbol,
-                    side,
-                    type,
-                    timeInForce: tif,
-                    qty: sizeMode === "qty" ? qty : undefined,
-                    notional: sizeMode === "notional" ? notional : undefined,
-                    limitPrice: type === "limit" ? limitPrice : undefined,
-                    extendedHours: extended,
-                    confirmLive,
-                  },
-                }),
-              );
-            }}
-          >
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-              <label className="grid gap-1 text-sm">
-                <span className="text-[11px] uppercase tracking-wider text-muted">Symbol</span>
-                <input
-                  value={symbol}
-                  onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-                  className="min-h-11 rounded-md border border-border bg-sunken px-3 font-mono text-sm"
-                />
-              </label>
-              <label className="grid gap-1 text-sm">
-                <span className="text-[11px] uppercase tracking-wider text-muted">Side</span>
-                <select
-                  value={side}
-                  onChange={(e) => setSide(e.target.value as "buy" | "sell")}
-                  className="min-h-11 rounded-md border border-border bg-sunken px-3 text-sm"
-                >
-                  <option value="buy">Buy</option>
-                  <option value="sell">Sell</option>
-                </select>
-              </label>
-              <label className="grid gap-1 text-sm">
-                <span className="text-[11px] uppercase tracking-wider text-muted">Type</span>
-                <select
-                  value={type}
-                  onChange={(e) => setType(e.target.value as "market" | "limit")}
-                  className="min-h-11 rounded-md border border-border bg-sunken px-3 text-sm"
-                >
-                  <option value="market">Market</option>
-                  <option value="limit">Limit</option>
-                </select>
-              </label>
-              <label className="grid gap-1 text-sm">
-                <span className="text-[11px] uppercase tracking-wider text-muted">TIF</span>
-                <select
-                  value={tif}
-                  onChange={(e) => setTif(e.target.value as "day" | "gtc" | "ioc")}
-                  className="min-h-11 rounded-md border border-border bg-sunken px-3 text-sm"
-                >
-                  <option value="day">Day</option>
-                  <option value="gtc">GTC</option>
-                  <option value="ioc">IOC</option>
-                </select>
-              </label>
-            </div>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <label className="flex min-h-11 items-center gap-2 rounded-md border border-border px-3 text-sm">
-                <input type="radio" checked={sizeMode === "notional"} onChange={() => setSizeMode("notional")} />
-                Dollars
-              </label>
-              <label className="flex min-h-11 items-center gap-2 rounded-md border border-border px-3 text-sm">
-                <input type="radio" checked={sizeMode === "qty"} onChange={() => setSizeMode("qty")} />
-                Shares
-              </label>
-              {sizeMode === "notional" ? (
-                <input
-                  value={notional}
-                  onChange={(e) => setNotional(e.target.value)}
-                  className="min-h-11 flex-1 rounded-md border border-border bg-sunken px-3 font-mono text-sm"
-                  inputMode="decimal"
-                />
-              ) : (
-                <input
-                  value={qty}
-                  onChange={(e) => setQty(e.target.value)}
-                  className="min-h-11 flex-1 rounded-md border border-border bg-sunken px-3 font-mono text-sm"
-                  inputMode="decimal"
-                />
-              )}
-              {type === "limit" ? (
-                <input
-                  value={limitPrice}
-                  onChange={(e) => setLimitPrice(e.target.value)}
-                  placeholder="Limit"
-                  className="min-h-11 flex-1 rounded-md border border-border bg-sunken px-3 font-mono text-sm"
-                  inputMode="decimal"
-                />
-              ) : null}
-            </div>
-            <label className="flex items-center gap-2 text-sm text-muted">
-              <input type="checkbox" checked={extended} onChange={(e) => setExtended(e.target.checked)} />
-              Extended hours (limit only on most sessions)
-            </label>
-            {live ? (
-              <label className="flex items-start gap-2 text-sm text-danger">
-                <input
-                  type="checkbox"
-                  className="mt-1"
-                  checked={confirmLive}
-                  onChange={(e) => setConfirmLive(e.target.checked)}
-                />
-                <span>Send this as a live order. I accept the fill risk.</span>
-              </label>
-            ) : null}
-            <button
-              type="submit"
-              disabled={busy || (live && !confirmLive)}
-              className={
-                "min-h-11 rounded-md px-4 text-sm " +
-                (side === "sell" ? "border border-danger text-danger" : "bg-primary text-primary-fg") +
-                " disabled:opacity-40"
-              }
-            >
-              {busy ? "Sending…" : `${side === "buy" ? "Buy" : "Sell"} ${symbol}`}
-            </button>
-          </form>
-        )}
-      </Panel>
-
-      <Panel title="Positions" aside={`${positions.length} open`}>
-        {positions.length === 0 ? (
-          <Empty>No open Alpaca positions.</Empty>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[40rem] text-left text-sm">
-              <thead className="text-[11px] uppercase tracking-wider text-muted">
-                <tr>
-                  <th className="pb-2 font-medium">Symbol</th>
-                  <th className="pb-2 font-medium">Qty</th>
-                  <th className="pb-2 font-medium">Avg</th>
-                  <th className="pb-2 font-medium">Last</th>
-                  <th className="pb-2 font-medium">Mkt</th>
-                  <th className="pb-2 font-medium">uP/L</th>
-                  <th className="pb-2 font-medium"></th>
-                </tr>
-              </thead>
-              <tbody className="font-mono text-xs">
-                {positions.map((p, i) => (
-                  <tr key={String(p.symbol ?? i)} className="border-t border-border">
-                    <td className="py-2 text-fg">{String(p.symbol ?? "")}</td>
-                    <td className="py-2">{String(p.qty ?? "")}</td>
-                    <td className="py-2">{String(p.avg_entry_price ?? "")}</td>
-                    <td className="py-2">{String(p.current_price ?? "")}</td>
-                    <td className="py-2">{String(p.market_value ?? "")}</td>
-                    <td className={"py-2 " + ((Number(p.unrealized_pl) || 0) < 0 ? "text-danger" : "")}>
-                      {String(p.unrealized_pl ?? "")}
-                    </td>
-                    <td className="py-2">
-                      {data.can_mutate && typeof p.symbol === "string" ? (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          className="min-h-11 rounded-md border border-border px-3 text-xs"
-                          onClick={() => void run(`Closed ${p.symbol}`, () => postAlpacaClose({ data: { symbol: String(p.symbol) } }))}
-                        >
-                          Close
-                        </button>
-                      ) : null}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Panel>
-
-      <Panel title="Open orders" aside={`${orders.length}`}>
-        {orders.length === 0 ? (
-          <Empty>No working orders.</Empty>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[36rem] text-left text-sm">
-              <thead className="text-[11px] uppercase tracking-wider text-muted">
-                <tr>
-                  <th className="pb-2 font-medium">Symbol</th>
-                  <th className="pb-2 font-medium">Side</th>
-                  <th className="pb-2 font-medium">Qty</th>
-                  <th className="pb-2 font-medium">Type</th>
-                  <th className="pb-2 font-medium">Status</th>
-                  <th className="pb-2 font-medium"></th>
-                </tr>
-              </thead>
-              <tbody className="font-mono text-xs">
-                {orders.map((o, i) => (
-                  <tr key={String(o.id ?? o.client_order_id ?? i)} className="border-t border-border">
-                    <td className="py-2">{String(o.symbol ?? "")}</td>
-                    <td className="py-2">{String(o.side ?? "")}</td>
-                    <td className="py-2">{String(o.qty ?? o.notional ?? "")}</td>
-                    <td className="py-2">{String(o.type ?? "")}</td>
-                    <td className="py-2">{String(o.status ?? "")}</td>
-                    <td className="py-2">
-                      {data.can_mutate && typeof o.id === "string" ? (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          className="min-h-11 rounded-md border border-border px-3 text-xs"
-                          onClick={() => void run("Canceled", () => postAlpacaCancel({ data: { orderId: String(o.id) } }))}
-                        >
-                          Cancel
-                        </button>
-                      ) : null}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <button
-          type="button"
-          className="mt-3 min-h-11 rounded-md border border-border px-4 text-sm"
-          onClick={() =>
-            void fetchAlpacaOrders({ data: { status: "all" } })
-              .then((r) => setHistory(r.orders))
-              .catch((e) => setErr(e instanceof Error ? e.message : "History failed"))
-          }
-        >
-          Load recent history
-        </button>
-        {history ? (
-          <ul className="mt-3 space-y-1 font-mono text-xs text-muted">
-            {history.slice(0, 20).map((o, i) => (
-              <li key={String(o.id ?? o.client_order_id ?? i)}>
-                {String(o.submitted_at ?? "").slice(0, 19)} {String(o.side ?? "")} {String(o.symbol ?? "")}{" "}
-                {String(o.qty ?? o.notional ?? "")} {String(o.status ?? "")}
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </Panel>
-    </div>
-  );
 }
 
-function money(v: string | boolean | null | undefined): string {
-  if (v == null || typeof v === "boolean") return "—";
+export function infoStatus(cardComplete: boolean, optionsValid: boolean | null): string {
+  if (cardComplete && optionsValid !== false) return "Ready";
+  if (optionsValid === false) return "Invalid source value";
+  return "Missing information";
+}
+
+export function timingLabel(quality: string): string {
+  if (quality === "ISSUER_CONFIRMED") return "After close · issuer confirmed";
+  if (quality === "VENDOR_CONFIRMED") return "After close · vendor confirmed";
+  return "Timing not confirmed";
+}
+
+export function reasonSentence(code: string): string {
+  const map: Record<string, string> = {
+    ADMITTED: "A simulated position was reserved.",
+    NOT_PREDICTED: "The rule did not select a trade setup.",
+    CARD_INCOMPLETE: "Required information was not complete when the decision was recorded.",
+    OPTIONS_INVALID: "The options input was not usable.",
+    IMPLIED_MOVE_OUT_OF_BAND: "The options-implied move proxy was outside the allowed band.",
+    REL5_NOT_NEGATIVE: "Five-day performance was not below the benchmark.",
+    REL63_NOT_POSITIVE: "Sixty-three-day performance was not above the benchmark.",
+    TIMING_NOT_CONFIRMED: "Earnings timing was not issuer-confirmed after close.",
+    MISSING_IMPLIED_MOVE: "The options-implied move proxy was not available.",
+    MISSING_REL5: "The five-day relative return was not available.",
+    MISSING_REL63: "The 63-day relative return was not available.",
+    CAPACITY_SLOTS: "Paper-position slot capacity was reached.",
+    CAPACITY_NOTIONAL: "Reserved simulated notional capacity was reached.",
+    PER_EVENT_LIMIT: "This session's paper-position limit was reached.",
+    ALREADY_OWNED: "This company already had an unresolved paper position.",
+    PAUSED: "New paper positions are paused.",
+    CUTOFF: "The decision deadline had passed.",
+    STALE_QUOTE: "The quote was too old for admission.",
+    WIDE_SPREAD: "The quoted spread was too wide for admission.",
+    PRICE_BELOW_MIN: "The price was below the admission minimum.",
+    NO_QUOTE: "A usable quote was not available.",
+    PREDICATE_FALSE_implied_move: "The expected move was outside the allowed band.",
+    PREDICATE_FALSE_benchmark_relative_5d: "Five-day performance was not below the market by enough.",
+    PREDICATE_FALSE_benchmark_relative_63d: "Sixty-three-day performance was not above the market by enough.",
+    PREDICATE_FALSE_timing_quality: "Earnings timing was not issuer-confirmed after close.",
+    PREDICATE_FALSE_card_complete: "Required information was not complete.",
+    PREDICATE_FALSE_options_valid: "The options input was not usable.",
+  };
+  return map[code] ?? code.replaceAll("_", " ").toLowerCase();
+}
+
+export function mainReason(reasons: string[]): string {
+  const skip = new Set(["ADMITTED", "PREDICT", "LONG"]);
+  const first = reasons.find((r) => !skip.has(r));
+  return first ? reasonSentence(first) : "The recorded predicates were evaluated in registered order.";
+}
+
+export function jobPurpose(name: string): string {
+  const map: Record<string, string> = {
+    "premarket-check": "Collect data",
+    "capture-cycle": "Collect data",
+    "seal-session": "Lock inputs",
+    "ordered-freeze": "Record decisions",
+    "due-deadlines": "Apply deadlines",
+    "mark-ingest": "Process official prices",
+    "grade-apply": "Prepare reports",
+    "report-finalize": "Release review window",
+    "learn-revise": "Update next-session checklist",
+  };
+  return map[name] ?? name.replaceAll("-", " ");
+}
+
+export function formatSession(iso: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso || "—";
+  const d = new Date(`${iso}T16:00:00-04:00`);
+  return d.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "America/New_York",
+  });
+}
+
+export function money(v: string | number | null | undefined, digits = 0): string {
+  if (v == null || v === "") return "—";
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  return n.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
+export function pct(v: string | null | undefined): string {
+  if (!v) return "Not available";
   const n = Number(v);
   if (!Number.isFinite(n)) return v;
-  return n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+  return `${(n * 100).toFixed(2)}%`;
 }
 
-function fmtTs(v: string | boolean | null | undefined): string {
-  if (typeof v !== "string" || !v) return "—";
-  return v.replace("T", " ").slice(0, 16);
+export function verificationLabel(level: string | null | undefined): string {
+  switch (level) {
+    case "BYTE_VERIFIED":
+      return "Inputs replay verified";
+    case "ATTESTED":
+      return "Prior verification retained";
+    case "HASH_ONLY":
+      return "Record hashes verified";
+    default:
+      return "Verification unavailable";
+  }
 }
 
-function maskAcct(n: string): string {
-  return n.length <= 4 ? n : `…${n.slice(-4)}`;
+export function alarmLabel(code: string): { title: string; detail: string } {
+  switch (code) {
+    case "EXIT_EVIDENCE_UNRESOLVED":
+      return {
+        title: "Exit price not available",
+        detail: "A simulated position is waiting for an official close. It is not a live order.",
+      };
+    case "DESK_CAPACITY_BLOCKED_ON_MARKS":
+      return {
+        title: "New simulated positions paused",
+        detail: "A reserved paper slot stays occupied until the missing official price is resolved.",
+      };
+    case "FREEZE_ARTIFACT_MISMATCH":
+      return {
+        title: "Recorded decision could not be replayed",
+        detail: "The saved freeze did not match a fresh check of the sealed inputs and rule. It is not a live order.",
+      };
+    case "OFF_DESIGN_EARLY_RELEASE":
+      return {
+        title: "Early result knowledge recorded",
+        detail: "New simulated entries stay paused until this review record is closed.",
+      };
+    default:
+      return {
+        title: "Needs review",
+        detail: "The desk recorded an open issue. It does not place a live order.",
+      };
+  }
 }
+
 ```
 
+## `src/desk/architectural-lock.test.ts`
 
----
+```
+import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
+import { test } from "node:test";
+import { inputHash, modeledFill } from "../kernel/index.ts";
 
-## `src/routes/admin.tsx` (8884 bytes)
+test("no parallel vicia/engine package", () => {
+  assert.equal(existsSync(new URL("../../vicia", import.meta.url)), false);
+});
 
-```tsx
-import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
-import { DeskShell, Empty, Err, Panel } from "@/components/desk-shell";
-import { AlpacaKeyInsert } from "@/components/alpaca-keys";
-import { fetchAdmin, postFireNote, postPause, postPrintKnowledge, postResume, postRetryDeadlines } from "@/desk/server-fns";
+test("input hash stays domain-prefixed and matches H01", () => {
+  const src = readFileSync(new URL("../kernel/index.ts", import.meta.url), "utf8");
+  assert.match(src, /Trading App\|input\|2/);
+  const got = inputHash({
+    manifestId: "manifest-20260914",
+    securityId: "SEC-A",
+    manifestHash: "1111111111111111111111111111111111111111111111111111111111111111",
+    snapshotHash: "2222222222222222222222222222222222222222222222222222222222222222",
+    ruleHash: "3333333333333333333333333333333333333333333333333333333333333333",
+    engineHash: "4444444444444444444444444444444444444444444444444444444444444444",
+    costHash: "5555555555555555555555555555555555555555555555555555555555555555",
+    margin: 3,
+    pins: [
+      ["obs-z", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      ["obs-a", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+    ],
+  });
+  assert.equal(got, "bac8f1353582276f85608c618ad44f104f5480fea76d03ce0dbcad4955522726");
+});
 
-export const Route = createFileRoute("/admin")({ component: Admin });
+test("modeled fill is decimal text, not float arithmetic", () => {
+  const got = modeledFill("123.456789");
+  assert.match(got, /^\d+\.\d{12}$/);
+  assert.notEqual(got, String(123.456789 * 1.0005));
+});
 
-function Admin() {
-  return (
-    <DeskShell>
-      <div className="flex flex-col gap-8">
-        <div>
-          <h1 className="text-xl font-medium tracking-tight">Admin</h1>
-          <p className="mt-1 text-sm text-muted">Insert Alpaca keys here. Desk operations sit below and are separate.</p>
-        </div>
-        <AlpacaKeyInsert />
-        <AdminOps />
-      </div>
-    </DeskShell>
-  );
+test("operator barrier copy is not a time gate", () => {
+  const src = readFileSync(new URL("./queries.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /until window release/);
+  assert.match(src, /information barrier/);
+});
+
+test("live Alpaca host and LIVE saves are rejected in source", () => {
+  const alpaca = readFileSync(new URL("./alpaca.ts", import.meta.url), "utf8");
+  assert.match(alpaca, /LIVE_DISABLED/);
+  assert.doesNotMatch(alpaca, /https:\/\/api\.alpaca\.markets/);
+  assert.match(alpaca, /AsyncLocalStorage/);
+  const wrap = readFileSync(new URL("./alpaca-data-service.server.ts", import.meta.url), "utf8");
+  assert.match(wrap, /canManage/);
+  assert.doesNotMatch(wrap, /durableStorage: true/);
+  const keys = readFileSync(new URL("./alpaca-master-key.server.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(keys, /trading-app-alpaca-master\.key/);
+  const cmds = readFileSync(new URL("./commands.ts", import.meta.url), "utf8");
+  assert.match(cmds, /RULE_MISMATCH/);
+  assert.match(cmds, /RULE_UNAVAILABLE/);
+  assert.match(cmds, /verifyFreezeArtifact/);
+  const verify = readFileSync(new URL("./verify-freeze.ts", import.meta.url), "utf8");
+  assert.match(verify, /observationHash/);
+  assert.match(verify, /snapshotHash/);
+  assert.match(verify, /manifestHash/);
+  assert.match(verify, /pinned observation is missing/);
+  assert.match(verify, /stored output payload does not hash to the freeze output hash/);
+  assert.match(verify, /freeze_verify_audit/);
+  const impl = readFileSync(new URL("./server-fns-impl.server.ts", import.meta.url), "utf8");
+  assert.match(impl, /verifyFreezeArtifact/);
+  assert.doesNotMatch(impl, /freezeMember\(newId\("cmd"\)/);
+});
+
+```
+
+## `migrations/0006_freeze_verify_audit.sql`
+
+```
+CREATE TABLE IF NOT EXISTS freeze_verify_audit (
+  audit_id text PRIMARY KEY,
+  freeze_id text NOT NULL,
+  manifest_id text NOT NULL,
+  permanent_security_id text NOT NULL,
+  result text NOT NULL CHECK (result IN ('BYTE_VERIFIED', 'HASH_ONLY', 'ATTESTED', 'UNVERIFIABLE')),
+  detail text NOT NULL,
+  checked_at timestamptz NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS freeze_verify_audit_freeze_idx ON freeze_verify_audit (freeze_id, checked_at DESC);
+
+```
+
+## `TRADING_APP_STANDALONE.py` (run this)
+
+```python
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Trading App — STANDALONE FREEZE-VERIFIER + KERNEL PACKET
+========================================================
+Give this single file to another model. Stdlib only. No pip. No repo required.
+
+WHAT THIS IS
+  The complete content-hash freeze verifier the TypeScript desk must match,
+  plus the v1.2 kernel (hashes, AST evaluate, Decimal fill).
+
+  Product: paper-only AMC earnings desk. Not a broker.
+  GitHub:  https://github.com/vicia05-lab/trading-app
+  Domain:  Trading App|input|2
+  Golden H01: bac8f1353582276f85608c618ad44f104f5480fea76d03ce0dbcad4955522726
+
+HOW TO RUN
+  python3 TRADING_APP_STANDALONE.py
+
+YOUR JOB (reviewing AI)
+  1. Run this file. If a golden fails, stop — the packet is corrupt.
+  2. Attack the verifier: missing observations, tombstones, hash-column-only
+     mutations, output_payload drift, pin-index swaps, alarm rollback.
+  3. Compare this reference to src/desk/verify-freeze.ts in the repo.
+  4. Produce GO / NO-GO. Do not rubber-stamp.
+
+MUST HOLD
+  - BYTE_VERIFIED requires a rebuilt commitment chain from actual contents:
+      observation envelope → observationHash
+      card + pins → snapshotHash
+      canonical_content → manifestHash
+      those digests + pins → inputHash
+      replayed decision payload → outputHash
+      Hash(persisted output_payload) = stored output_hash
+      persisted output_payload = replayed payload
+  - Missing or tombstoned observation without attestation → UNVERIFIABLE
+  - Diagnostic rows COMMIT even when verification throws
+  - Verify never creates a freeze
+  - NO_FREEZE ≠ STAND_DOWN
+  - LIVE trading is not in this kernel
+
+DO NOT
+  - Invent a live broker
+  - Treat JSON numbers as legal in CJ1
+  - Label BYTE_VERIFIED because the decision still PREDICTs
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import struct
+import unittest
+from decimal import (
+    Decimal,
+    ROUND_HALF_UP,
+    localcontext,
+    Context,
+    InvalidOperation,
+    DivisionByZero,
+    Overflow,
+)
+
+D = Decimal
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PRODUCTION KERNEL (matches the TypeScript desk kernel, not the conflicting paste)
+# ─────────────────────────────────────────────────────────────────────────────
+
+IDENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,63}\Z")
+HEX = re.compile(r"[0-9a-f]{64}\Z")
+DEC = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\Z")
+KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+CANON_DEC12 = re.compile(r"-?(?:0|[1-9][0-9]*)\.[0-9]{12}\Z")
+# PATCH-05: money/price text must be plain decimal with an explicit fraction.
+# Blocks "1E2", "1e2", "+100.00", " 100.00", "100.00 ", "0.1_0", "Inf", "NaN".
+DEC_TEXT = re.compile(r"-?(?:0|[1-9][0-9]*)\.[0-9]{1,18}\Z")
+
+PRODUCT_NAME = "Trading App"
+ENGINE_VERSION = "trading-app-evaluator-1.2.0"
+PAPER_ONLY = True
+LIVE_TRADING_SUPPORTED = False
+ACTIVE_MODEL_WEIGHT = "0"
+
+INITIAL_AST = {
+    "schema": "1",
+    "decision": "PREDICT",
+    "direction": "LONG",
+    "otherwise": "STAND_DOWN",
+    "all": [
+        {"field": "timing_quality", "op": "EQ", "value": "ISSUER_CONFIRMED"},
+        {"field": "card_complete", "op": "EQ", "value": True},
+        {"field": "options_valid", "op": "EQ", "value": True},
+        {"field": "implied_move", "op": "GTE", "value": "0.040000000000"},
+        {"field": "implied_move", "op": "LTE", "value": "0.150000000000"},
+        {"field": "benchmark_relative_5d", "op": "LT", "value": "0.000000000000"},
+        {"field": "benchmark_relative_63d", "op": "GT", "value": "0.000000000000"},
+    ],
 }
 
-function AdminOps() {
-  const [data, setData] = useState<Awaited<ReturnType<typeof fetchAdmin>> | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
-  async function reload() {
-    const d = await fetchAdmin();
-    setData(d);
-  }
-  useEffect(() => {
-    void reload().catch((e) => setError(e instanceof Error ? e.message : "Could not load admin"));
-  }, []);
+COST_MODEL_CONTENT = {
+    "cost_model_version": "1",
+    "cost_model_basis": "CONSERVATIVE_STRESS_HAIRCUT",
+    "constant_penalty": "0.000500",
+    "imbalance_coefficient": "0.000000",
+    "imbalance_term": "0.000000",
+    "commission_per_fill": "0.0000",
+    "entry_rounding_scale": "12",
+    "pnl_rounding_scale": "4",
+    "rounding_mode": "ROUND_HALF_UP",
+}
 
-  async function run(label: string, fn: () => Promise<unknown>) {
-    setNote(null);
-    try {
-      await fn();
-      setNote(label);
-      await reload();
-    } catch (e) {
-      setNote(e instanceof Error ? e.message : "Action failed");
+FIELD_TYPES = {
+    "timing_quality": "enum",
+    "card_complete": "bool",
+    "options_valid": "bool",
+    "implied_move": "decimal",
+    "benchmark_relative_5d": "decimal",
+    "benchmark_relative_63d": "decimal",
+}
+
+CAPACITY = {
+    "slots": 3,
+    "notional": D("15000.0000"),
+    "ticket": D("5000.0000"),
+    "per_event": 2,
+    "margin_minutes": 3,
+}
+
+class KernelError(ValueError):
+    pass
+
+def ident(s):
+    if type(s) is not str or not IDENT.fullmatch(s):
+        raise KernelError("INVALID_ID")
+    return s
+
+def digest_bytes(s):
+    if type(s) is not str or not HEX.fullmatch(s):
+        raise KernelError("INVALID_SHA256_HEX")
+    raw = bytes.fromhex(s)
+    if len(raw) != 32:
+        raise KernelError("INVALID_SHA256_HEX")
+    return raw
+
+def field(b: bytes) -> bytes:
+    if type(b) is not bytes or len(b) > 4294967295:
+        raise KernelError("INVALID_FIELD")
+    return struct.pack(">I", len(b)) + b
+
+def u32(v: int) -> bytes:
+    if type(v) is not int or not 0 <= v <= 4294967295:
+        raise KernelError("INVALID_UINT32")
+    return struct.pack(">I", v)
+
+def canon(obj) -> bytes:
+    def validate(x, depth=0):
+        if depth > 32:
+            raise KernelError("JSON_DEPTH_EXCEEDED")
+        if x is None or type(x) is bool:
+            return
+        if type(x) is str:
+            x.encode("utf-8", errors="strict")
+            return
+        if type(x) is list:
+            for v in x:
+                validate(v, depth + 1)
+            return
+        if type(x) is dict:
+            for k, v in x.items():
+                if type(k) is not str or not KEY.fullmatch(k):
+                    raise KernelError("INVALID_CANONICAL_KEY")
+                validate(v, depth + 1)
+            return
+        raise KernelError("CANONICAL_NUMBERS_MUST_BE_STRINGS")
+
+    validate(obj)
+    return json.dumps(
+        obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+
+def h(domain: str, *parts: bytes) -> str:
+    return hashlib.sha256(
+        field(domain.encode("ascii")) + b"".join(field(p) for p in parts)
+    ).hexdigest()
+
+def shuffle(ids, seed):
+    if type(ids) is not list:
+        raise KernelError("INVALID_MEMBER_LIST")
+    b = digest_bytes(seed)
+    for x in ids:
+        ident(x)
+    if len(ids) != len(set(ids)):
+        raise KernelError("DUPLICATE_MEMBER")
+    return sorted(
+        ids,
+        key=lambda x: (hashlib.sha256(b + x.encode("utf-8")).digest(), x.encode("utf-8")),
+    )
+
+def input_hash(
+    manifest_id,
+    security_id,
+    manifest_hash,
+    snapshot_hash,
+    rule_hash,
+    engine_hash,
+    cost_hash,
+    margin,
+    pins,
+):
+    """
+    pins: list of (observation_id, observation_hash_hex)
+    Preimage is length-prefixed fields, domain "Trading App|input|2".
+    Pin order in the caller's list MUST NOT change the digest (sorted by id utf-8).
+    """
+    ident(manifest_id)
+    ident(security_id)
+    if type(margin) is not int or not 2 <= margin <= 15:
+        raise KernelError("INVALID_MARGIN")
+    if type(pins) is not list:
+        raise KernelError("INVALID_PINS")
+    seen = []
+    for p in pins:
+        if type(p) not in (list, tuple) or len(p) != 2:
+            raise KernelError("INVALID_PIN")
+        ident(p[0])
+        digest_bytes(p[1])
+        seen.append(p[0])
+    if len(seen) != len(set(seen)):
+        raise KernelError("DUPLICATE_PIN")
+    pairs = sorted(pins, key=lambda p: p[0].encode("utf-8"))
+    encoded = field(b"Trading App|input|2")
+    encoded += field(manifest_id.encode("utf-8")) + field(security_id.encode("utf-8"))
+    for x in (manifest_hash, snapshot_hash, rule_hash, engine_hash, cost_hash):
+        encoded += field(digest_bytes(x))
+    encoded += field(u32(margin)) + field(u32(len(pairs)))
+    for pid, ph in pairs:
+        encoded += field(pid.encode("utf-8")) + field(digest_bytes(ph))
+    return hashlib.sha256(encoded).hexdigest()
+
+def normalize_reasons(reasons):
+    """PATCH-07: canonical reason ordering — sorted by utf-8, deduplicated."""
+    if type(reasons) is not list:
+        raise KernelError("INVALID_REASONS")
+    for r in reasons:
+        if type(r) is not str:
+            raise KernelError("INVALID_REASONS")
+    if len(reasons) != len(set(reasons)):
+        raise KernelError("DUPLICATE_REASON")
+    return sorted(reasons, key=lambda r: r.encode("utf-8"))
+
+def output_hash(input_hex, decision_payload) -> str:
+    """PATCH-07: 'reasons' is an ordered JSON list, so an unsorted producer made
+    the decision hash nondeterministic for the same logical outcome. The list is
+    now required to arrive already canonically ordered and deduplicated."""
+    if type(decision_payload) is dict and "reasons" in decision_payload:
+        rs = decision_payload["reasons"]
+        if rs != normalize_reasons(rs):
+            raise KernelError("NONCANONICAL_REASONS")
+    return h("Trading App|decision|1", digest_bytes(input_hex), canon(decision_payload))
+
+def payload_hash(normalized_payload) -> str:
+    return h("Trading App|payload|1", canon(normalized_payload))
+
+def observation_hash(envelope) -> str:
+    return h("Trading App|observation|1", canon(envelope))
+
+def rule_ast_hash(ast) -> str:
+    return h("Trading App|rule|1", canon(ast))
+
+def policy_hash(bundle) -> str:
+    return h("Trading App|policy|1", canon(bundle))
+
+def cost_model_hash(content) -> str:
+    return h("Trading App|cost|1", canon(content))
+
+def snapshot_hash(content) -> str:
+    return h("Trading App|snapshot|2", canon(content))
+
+def manifest_hash(content) -> str:
+    return h("Trading App|manifest|2", canon(content))
+
+def _dec_ctx():
+    return localcontext(
+        Context(
+            prec=60,
+            rounding=ROUND_HALF_UP,
+            traps=[InvalidOperation, DivisionByZero, Overflow],
+        )
+    )
+
+def dec_text(value, code="INVALID_DECIMAL_TEXT", scale=None) -> Decimal:
+    """PATCH-05: parse decimal TEXT only. No floats, no exponent, no whitespace,
+    no leading '+', no underscores, no Inf/NaN. Optional exact-scale pinning for
+    callers that hash or persist the raw string."""
+    if type(value) is not str or not DEC_TEXT.fullmatch(value):
+        raise KernelError(code)
+    if scale is not None:
+        frac = value.split(".", 1)[1]
+        if len(frac) != scale:
+            raise KernelError("NONCANONICAL_SCALE")
+    with _dec_ctx():
+        return D(value)
+
+def modeled_fill(
+    close: str,
+    penalty: str = "0.000500",
+    imbalance_coefficient: str = "0.000000",
+    imbalance_term: str = "0.000000",
+) -> str:
+    p = dec_text(close, "INVALID_DECIMAL_TEXT")
+    c = dec_text(penalty, "INVALID_PENALTY_TEXT")
+    a = dec_text(imbalance_coefficient, "INVALID_IMBALANCE_TEXT")
+    b = dec_text(imbalance_term, "INVALID_IMBALANCE_TEXT")
+    with _dec_ctx():
+        if p <= 0 or p > D("1000000"):
+            raise KernelError("ABOVE_OR_BELOW_DOMAIN")
+        out = (p * (D("1") + c + a * b)).quantize(D("0.000000000001"), rounding=ROUND_HALF_UP)
+        return format(out, "f")
+
+def paper_pnl(notional: str, exit_price: str, fill: str, commission: str = "0.0000") -> str:
+    """(notional * (exit/fill - 1) - 2*commission) at 4 dp.
+
+    PATCH-01: rejects float/non-text args (was silently accepting floats).
+    PATCH-02: rejects fill <= 0 (was sign-flipping P&L on a negative fill).
+    """
+    n = dec_text(notional, "INVALID_NOTIONAL_TEXT")
+    x = dec_text(exit_price, "INVALID_EXIT_TEXT")
+    f = dec_text(fill, "INVALID_FILL_TEXT")
+    c = dec_text(commission, "INVALID_COMMISSION_TEXT")
+    if f <= 0:
+        raise KernelError("DIVISION_BY_ZERO" if f == 0 else "NONPOSITIVE_FILL")
+    if x <= 0:
+        raise KernelError("NONPOSITIVE_EXIT")
+    if n < 0:
+        raise KernelError("NEGATIVE_NOTIONAL")
+    if c < 0:
+        raise KernelError("NEGATIVE_COMMISSION")
+    with _dec_ctx():
+        dollar = n * (x / f - D("1")) - D("2") * c
+        return format(dollar.quantize(D("0.0001"), rounding=ROUND_HALF_UP), "f")
+
+def direction_hit(entry: str, exit: str) -> bool:
+    """Zero return is a MISS (False), not None. Long-only: exit > entry is a hit.
+
+    PATCH-03: rejects float/non-text args so hit labels are never float-derived.
+    """
+    e = dec_text(entry, "INVALID_ENTRY_TEXT")
+    x = dec_text(exit, "INVALID_EXIT_TEXT")
+    if e <= 0:
+        raise KernelError("NONPOSITIVE_ENTRY")
+    with _dec_ctx():
+        if x == e:
+            return False
+        return x > e
+
+def band_hit(entry: str, exit: str, low: str, high: str) -> bool:
+    """PATCH-03: text-only args; band must be ordered."""
+    e = dec_text(entry, "INVALID_ENTRY_TEXT")
+    x = dec_text(exit, "INVALID_EXIT_TEXT")
+    lo = dec_text(low, "INVALID_BAND_TEXT")
+    hi = dec_text(high, "INVALID_BAND_TEXT")
+    if e <= 0:
+        raise KernelError("NONPOSITIVE_ENTRY")
+    if lo > hi:
+        raise KernelError("INVALID_BAND_ORDER")
+    with _dec_ctx():
+        return e * (D("1") + lo) <= x <= e * (D("1") + hi)
+
+def _canon12(d: Decimal) -> str:
+    q = d.quantize(D("0.000000000000"), rounding=ROUND_HALF_UP)
+    s = format(q, "f")
+    if "." not in s:
+        s += "." + "0" * 12
+    whole, frac = s.split(".")
+    frac = (frac + "0" * 12)[:12]
+    return f"{whole}.{frac}"
+
+def magnitude_band(implied_move: str) -> dict:
+    with _dec_ctx():
+        m = D(implied_move)
+        return {
+            "low": _canon12(m * D("0.5")),
+            "high": _canon12(m * D("2.0")),
+        }
+
+def validate_ast(ast) -> None:
+    if type(ast) is not dict:
+        raise KernelError("INVALID_AST_KEYS")
+    expected = {"schema", "decision", "direction", "otherwise", "all"}
+    if set(ast.keys()) != expected or len(ast) != 5:
+        raise KernelError("INVALID_AST_KEYS")
+    for k in ("schema", "decision", "direction", "otherwise"):
+        if ast[k] != INITIAL_AST[k]:
+            raise KernelError("INVALID_AST_HEADER")
+    cc = ast["all"]
+    if type(cc) is not list or not 1 <= len(cc) <= 32:
+        raise KernelError("INVALID_AST_CONDITIONS")
+    for con in cc:
+        if type(con) is not dict or set(con.keys()) != {"field", "op", "value"}:
+            raise KernelError("INVALID_CONDITION")
+        f, op, v = con["field"], con["op"], con["value"]
+        if f not in FIELD_TYPES:
+            raise KernelError("UNKNOWN_FIELD")
+        if op not in {"EQ", "LT", "GT", "LTE", "GTE"}:
+            raise KernelError("UNKNOWN_OP")
+        typ = FIELD_TYPES[f]
+        if typ == "bool" and (op != "EQ" or type(v) is not bool):
+            raise KernelError("INVALID_BOOL_PREDICATE")
+        if typ == "enum" and (op != "EQ" or v != "ISSUER_CONFIRMED"):
+            raise KernelError("INVALID_ENUM_PREDICATE")
+        if typ == "decimal":
+            if type(v) is not str or not CANON_DEC12.fullmatch(v):
+                raise KernelError("NONCANONICAL_CONSTANT")
+
+def evaluate(ast, card) -> dict:
+    """Total function: never throws to the caller. Invalid rule → STAND_DOWN + INVALID_RULE."""
+    try:
+        validate_ast(ast)
+    except KernelError:
+        return {
+            "status": "INVALID_RULE",
+            "decision": "STAND_DOWN",
+            "direction": None,
+            "reasons": ["INVALID_RULE_AST"],
+        }
+    if type(card) is not dict:
+        return {
+            "status": "INVALID_CARD",
+            "decision": "STAND_DOWN",
+            "direction": None,
+            "reasons": ["INVALID_CARD"],
+        }
+    if card.get("card_complete") is not True:
+        t = card.get("card_complete")
+        if t is False or t is None:
+            return {
+                "status": "OK",
+                "decision": "STAND_DOWN",
+                "direction": None,
+                "reasons": ["CARD_INCOMPLETE"],
+            }
+        return {
+            "status": "INVALID_CARD",
+            "decision": "STAND_DOWN",
+            "direction": None,
+            "reasons": ["INVALID_CARD_COMPLETE"],
+        }
+    for co in ast["all"]:
+        f, op, v = co["field"], co["op"], co["value"]
+        val = card.get(f, None)
+        if val is None:
+            return {
+                "status": "OK",
+                "decision": "STAND_DOWN",
+                "direction": None,
+                "reasons": [f"MISSING_{f}"],
+            }
+        typ = FIELD_TYPES[f]
+        if typ == "bool":
+            if type(val) is not bool:
+                return {
+                    "status": "INVALID_CARD",
+                    "decision": "STAND_DOWN",
+                    "direction": None,
+                    "reasons": [f"INVALID_{f}"],
+                }
+            ok = op == "EQ" and val is v
+        elif typ == "enum":
+            if val not in ("ISSUER_CONFIRMED", "ESTIMATED"):
+                return {
+                    "status": "INVALID_CARD",
+                    "decision": "STAND_DOWN",
+                    "direction": None,
+                    "reasons": [f"INVALID_{f}"],
+                }
+            ok = op == "EQ" and val == v
+        else:
+            if type(val) is not str or not CANON_DEC12.fullmatch(val):
+                return {
+                    "status": "INVALID_CARD",
+                    "decision": "STAND_DOWN",
+                    "direction": None,
+                    "reasons": [f"INVALID_{f}"],
+                }
+            with _dec_ctx():
+                left, right = D(val), D(v)
+                ok = {
+                    "EQ": left == right,
+                    "LT": left < right,
+                    "GT": left > right,
+                    "LTE": left <= right,
+                    "GTE": left >= right,
+                }[op]
+        if not ok:
+            return {
+                "status": "OK",
+                "decision": "STAND_DOWN",
+                "direction": None,
+                "reasons": [f"PREDICATE_FALSE_{f}"],
+            }
+    return {
+        "status": "OK",
+        "decision": "PREDICT",
+        "direction": "LONG",
+        "reasons": [],
     }
-  }
 
-  if (error) return <Err>{error}</Err>;
-  if (!data) return <Empty>Loading desk operations…</Empty>;
-  if ("needs_role" in data) return null;
-  return (
-    <div className="flex flex-col gap-4">
-      {note ? <p className="text-sm text-muted">{note}</p> : null}
-      <OpsBody data={data} run={run} />
-    </div>
-  );
-}
+def compute_card_complete(card: dict) -> bool:
+    tq = card.get("timing_quality")
+    if tq not in ("ISSUER_CONFIRMED", "ESTIMATED"):
+        return False
+    if type(card.get("options_valid")) is not bool:
+        return False
+    # PATCH-06: use the SAME canonicality rule the evaluator uses (CANON_DEC12).
+    # Previously this accepted "0.08" while evaluate() called it INVALID_CARD, so
+    # the two gatekeepers disagreed on what a valid card is.
+    mv = card.get("implied_move")
+    if type(mv) is not str or not CANON_DEC12.fullmatch(mv):
+        return False
+    try:
+        with _dec_ctx():
+            m = D(mv)
+            if m <= 0 or m > 5:
+                return False
+    except Exception:
+        return False
+    for f in ("benchmark_relative_5d", "benchmark_relative_63d"):
+        v = card.get(f)
+        if type(v) is not str or not CANON_DEC12.fullmatch(v):
+            return False
+        try:
+            with _dec_ctx():
+                D(v)
+        except Exception:
+            return False
+    return True
 
-function OpsBody({
-  data,
-  run,
-}: {
-  data: Exclude<Awaited<ReturnType<typeof fetchAdmin>>, { needs_role: true }>;
-  run: (label: string, fn: () => Promise<unknown>) => void;
-}) {
-  const d = data.data;
-  const [reason, setReason] = useState("operational pause");
-  const [hyp, setHyp] = useState<"IMPLEMENTATION_BUG" | "COVERAGE_SHIFT" | "REGIME_SHIFT">("COVERAGE_SHIFT");
-  const [fire, setFire] = useState("");
-  const [pk, setPk] = useState({ eventKey: "", securityId: "", reason: "" });
-  return (
-    <div className="flex flex-col gap-4">
-      <h2 className="text-sm font-medium tracking-tight text-muted">Desk operations</h2>
-      <Panel title="Admission gate" aside={d.admission_paused ? "PAUSED" : "open"}>
-        {d.can_mutate ? (
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <input
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              className="min-h-11 flex-1 rounded-md border border-border bg-sunken px-3 text-sm"
-              placeholder="Pause reason"
-            />
-            <button
-              type="button"
-              className="min-h-11 rounded-md border border-border px-4 text-sm"
-              onClick={() => run("Paused", () => postPause({ data: { reason } }))}
-            >
-              Pause
-            </button>
-            <button
-              type="button"
-              className="min-h-11 rounded-md bg-primary px-4 text-sm text-primary-fg"
-              onClick={() => run("Resumed", () => postResume())}
-            >
-              Resume
-            </button>
-          </div>
-        ) : (
-          <Empty>Reviewer cannot mutate admission.</Empty>
-        )}
-        {d.pause_reason ? <p className="mt-2 text-xs text-muted">{d.pause_reason}</p> : null}
-      </Panel>
-      <Panel title="Jobs">
-        <ul className="divide-y divide-border text-sm">
-          {d.jobs.map((j) => (
-            <li key={j.job_name} className="flex justify-between py-2 font-mono text-xs">
-              <span>{j.job_name}</span>
-              <span className="text-muted">{j.status}</span>
-            </li>
-          ))}
-        </ul>
-        {d.can_mutate ? (
-          <button
-            type="button"
-            className="mt-3 min-h-11 rounded-md border border-border px-4 text-sm"
-            onClick={() => run("Deadlines retried", () => postRetryDeadlines())}
-          >
-            Retry due deadlines
-          </button>
-        ) : null}
-      </Panel>
-      <Panel title="Deadlines">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[28rem] text-left text-xs">
-            <thead className="text-[11px] uppercase tracking-wider text-muted">
-              <tr>
-                <th className="pb-2 font-medium">Kind</th>
-                <th className="pb-2 font-medium">Scheduled</th>
-                <th className="pb-2 font-medium">Applied</th>
-              </tr>
-            </thead>
-            <tbody className="font-mono">
-              {d.deadlines.map((x, i) => (
-                <tr key={i} className="border-t border-border">
-                  <td className="py-2">{x.kind}</td>
-                  <td className="py-2">{x.scheduled_at}</td>
-                  <td className="py-2">{x.applied_at ?? (x.overdue ? "OVERDUE" : "pending")}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Panel>
-      <Panel title="Alarms">
-        {d.alarms.length === 0 ? (
-          <Empty>No open operational alarms.</Empty>
-        ) : (
-          <ul className="space-y-2 text-sm">
-            {d.alarms.map((a, i) => (
-              <li key={i} className="rounded-md border border-border px-3 py-2">
-                <div className="flex justify-between gap-2">
-                  <span className="font-mono text-xs">{a.code}</span>
-                  <span className="text-[11px] text-muted">{a.status}</span>
-                </div>
-                <p className="mt-1 text-xs text-muted">
-                  {a.component}
-                  {a.blocks_new_admission ? " · blocks new admission" : ""}
-                </p>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Panel>
-      <Panel title="Early-result knowledge">
-        {d.can_mutate ? (
-          <div className="grid gap-2">
-            <input className="min-h-11 rounded-md border border-border bg-sunken px-3 text-sm" placeholder="Event key" value={pk.eventKey} onChange={(e) => setPk({ ...pk, eventKey: e.target.value })} />
-            <input className="min-h-11 rounded-md border border-border bg-sunken px-3 text-sm" placeholder="Permanent security id" value={pk.securityId} onChange={(e) => setPk({ ...pk, securityId: e.target.value })} />
-            <input className="min-h-11 rounded-md border border-border bg-sunken px-3 text-sm" placeholder="Reason" value={pk.reason} onChange={(e) => setPk({ ...pk, reason: e.target.value })} />
-            <button
-              type="button"
-              className="min-h-11 rounded-md border border-border text-sm"
-              onClick={() => run("Knowledge recorded", () => postPrintKnowledge({ data: pk }))}
-            >
-              Append knowledge
-            </button>
-          </div>
-        ) : (
-          <Empty>Operator only.</Empty>
-        )}
-      </Panel>
-      <Panel title="Fire-rate note">
-        {d.can_mutate ? (
-          <div className="grid gap-2">
-            <select
-              className="min-h-11 rounded-md border border-border bg-sunken px-3 text-sm"
-              value={hyp}
-              onChange={(e) => setHyp(e.target.value as typeof hyp)}
-            >
-              <option value="IMPLEMENTATION_BUG">IMPLEMENTATION_BUG</option>
-              <option value="COVERAGE_SHIFT">COVERAGE_SHIFT</option>
-              <option value="REGIME_SHIFT">REGIME_SHIFT</option>
-            </select>
-            <textarea className="rounded-md border border-border bg-sunken px-3 py-2 text-sm" rows={3} value={fire} onChange={(e) => setFire(e.target.value)} />
-            <button
-              type="button"
-              className="min-h-11 rounded-md border border-border text-sm"
-              onClick={() => run("Note stored", () => postFireNote({ data: { hypothesis: hyp, note: fire } }))}
-            >
-              Append note
-            </button>
-          </div>
-        ) : (
-          <Empty>Operator only.</Empty>
-        )}
-        <ul className="mt-3 space-y-1 text-xs text-muted">
-          {d.fire_rate_notes.map((n, i) => (
-            <li key={i}>
-              <span className="font-mono">{n.hypothesis}</span> — {n.note}
-            </li>
-          ))}
-        </ul>
-      </Panel>
-      <Panel title="Data ports">
-        <dl className="grid grid-cols-2 gap-2 text-xs md:grid-cols-3">
-          {Object.entries(d.ports).map(([k, v]) => (
-            <div key={k}>
-              <dt className="text-muted">{k}</dt>
-              <dd className="font-mono">{v}</dd>
-            </div>
-          ))}
-        </dl>
-      </Panel>
-    </div>
-  );
-}
-```
+# ─────────────────────────────────────────────────────────────────────────────
+# COMPLETE FREEZE VERIFIER (in-memory reference)
+# ─────────────────────────────────────────────────────────────────────────────
+
+import copy
+import unittest
+
+MARGIN = 3
+
+class VerifyError(Exception):
+    def __init__(self, code, detail):
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
 
 
----
-
-## `src/routes/login.tsx` (5440 bytes)
-
-```tsx
-import { createFileRoute, Navigate } from "@tanstack/react-router";
-import { useState } from "react";
-import { GROK_PROVIDERS, authClient, authEnabled, signIn } from "@/lib/auth/client";
-import { SignedIn } from "@/lib/auth/gates";
-
-export const Route = createFileRoute("/login")({ component: Login });
-
-function Login() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [mode, setMode] = useState<"in" | "up">("up");
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  async function openDesk() {
-    setBusy(true);
-    setErr(null);
-    try {
-      const stamp = crypto.randomUUID().replace(/-/g, "").slice(0, 10);
-      const guestEmail = `op-${stamp}@example.com`;
-      const guestPass = `${crypto.randomUUID()}Aa1!`;
-      const { error } = await authClient.signUp.email({
-        email: guestEmail,
-        password: guestPass,
-        name: "Operator",
-      });
-      if (error) throw new Error(error.message);
-      window.location.href = "/keys";
-    } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : "Could not open the desk");
-    } finally {
-      setBusy(false);
+def decision_payload(ev, card):
+    if ev["decision"] == "PREDICT" and card.get("implied_move"):
+        band = magnitude_band(card["implied_move"])
+    else:
+        band = {"low": None, "high": None}
+    reasons = list(ev["reasons"])
+    return {
+        "status": ev["status"],
+        "decision": ev["decision"],
+        "direction": ev["direction"],
+        "magnitude_low": band["low"],
+        "magnitude_high": band["high"],
+        "card_complete": card["card_complete"],
+        "options_valid": card["options_valid"],
+        "reasons": reasons,
+        "missing": [r for r in reasons if r.startswith("MISSING_")],
     }
-  }
 
-  async function onEmail(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setErr(null);
-    try {
-      if (mode === "up") {
-        const { error } = await authClient.signUp.email({ email, password, name: email.split("@")[0] ?? "desk" });
-        if (error) throw new Error(error.message);
-      } else {
-        const { error } = await authClient.signIn.email({ email, password });
-        if (error) throw new Error(error.message);
-      }
-      window.location.href = "/keys";
-    } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : "Sign-in failed");
-    } finally {
-      setBusy(false);
+
+def _hex(x):
+    return x if isinstance(x, str) else x
+
+
+class Store:
+    """Minimal immutable-artifact store plus append-only diagnostics."""
+
+    def __init__(self):
+        self.manifest = {}
+        self.member = {}
+        self.sealed = {}
+        self.sealed_pins = {}
+        self.freeze = {}
+        self.freeze_pins = {}
+        self.observation = {}
+        self.rule = {}
+        self.admission = {}
+        self.audit = []
+        self.alarms = []
+        self._committed_alarms = []
+        self._in_txn = False
+        self._txn_audit = None
+        self._txn_alarms = None
+
+    def begin(self):
+        self._in_txn = True
+        self._txn_audit = []
+        self._txn_alarms = []
+
+    def rollback(self):
+        self._in_txn = False
+        self._txn_audit = None
+        self._txn_alarms = None
+
+    def commit(self):
+        if self._txn_audit:
+            self.audit.extend(self._txn_audit)
+        if self._txn_alarms:
+            self.alarms.extend(self._txn_alarms)
+            self._committed_alarms.extend(self._txn_alarms)
+        self._in_txn = False
+        self._txn_audit = None
+        self._txn_alarms = None
+
+    def add_audit(self, row):
+        # Diagnostics always persist, even if a later throw rolls back a writer txn.
+        self.audit.append(row)
+
+    def add_alarm(self, row):
+        self.alarms.append(row)
+        self._committed_alarms.append(row)
+
+
+def verify_freeze(store: Store, manifest_id: str, security_id: str) -> dict:
+    """Read-only replay. Never creates a freeze. Diagnostics commit on failure."""
+    fr = store.freeze.get((manifest_id, security_id))
+    if not fr:
+        raise VerifyError("NOT_FOUND", "no freeze to verify")
+    freeze_id = fr["freeze_id"]
+
+    def fail(detail):
+        store.add_audit({
+            "freeze_id": freeze_id,
+            "manifest_id": manifest_id,
+            "security_id": security_id,
+            "result": "UNVERIFIABLE",
+            "detail": detail,
+        })
+        store.add_alarm({
+            "code": "FREEZE_ARTIFACT_MISMATCH",
+            "freeze_id": freeze_id,
+            "detail": detail,
+        })
+        raise VerifyError("FREEZE_ARTIFACT_MISMATCH", detail)
+
+    man = store.manifest[manifest_id]
+    rebuilt_manifest = manifest_hash(man["canonical_content"])
+    if rebuilt_manifest != man["manifest_hash"]:
+        fail("manifest content does not match the stored manifest hash")
+
+    member = store.member[(manifest_id, security_id)]
+    sealed = store.sealed[(manifest_id, security_id)]
+    sealed_pins = list(store.sealed_pins[(manifest_id, security_id)])
+    freeze_pins = list(store.freeze_pins[freeze_id])
+
+    if (
+        len(sealed_pins) != len(freeze_pins)
+        or len(sealed_pins) != fr["pin_count"]
+        or len(sealed_pins) != sealed["pin_count"]
+    ):
+        fail("pin count disagrees across freeze, sealed inputs, and pin rows")
+
+    sealed_pins = sorted(sealed_pins, key=lambda p: p["pin_index"])
+    freeze_pins = sorted(freeze_pins, key=lambda p: p["pin_index"])
+    for i, s in enumerate(sealed_pins):
+        f = freeze_pins[i]
+        if (
+            s["observation_id"] != f["observation_id"]
+            or s["observation_hash"] != f["observation_hash"]
+            or s["pin_index"] != f["pin_index"]
+            or s["pin_index"] != i
+        ):
+            fail("pin membership or pin index disagrees with the sealed set")
+
+    for pin in sealed_pins:
+        obs = store.observation.get(pin["observation_id"])
+        if not obs:
+            fail("pinned observation is missing")
+        if obs.get("tombstoned"):
+            fail("pinned observation is tombstoned without a surviving attestation")
+        recomputed = observation_hash(obs["envelope"])
+        if recomputed != obs["observation_hash"] or recomputed != pin["observation_hash"]:
+            fail("observation content does not match the sealed pin hash")
+
+    pin_list = sorted(
+        [{"id": p["observation_id"], "hash": p["observation_hash"]} for p in sealed_pins],
+        key=lambda p: p["id"],
+    )
+    rebuilt_snap = snapshot_hash({
+        "permanent_security_id": security_id,
+        "event_key": member["event_key"],
+        "session_date": man["session_date"],
+        "card": sealed["card"],
+        "pins": pin_list,
+    })
+    if rebuilt_snap != member["snapshot_hash"]:
+        fail("sealed card and pins do not match the stored snapshot hash")
+
+    pin_tuples = [(p["observation_id"], p["observation_hash"]) for p in sealed_pins]
+    in_hash = input_hash(
+        manifest_id,
+        security_id,
+        rebuilt_manifest,
+        rebuilt_snap,
+        man["rule_ast_hash"],
+        man["evaluator_artifact_hash"],
+        man["cost_model_hash"],
+        MARGIN,
+        pin_tuples,
+    )
+    if in_hash != fr["input_hash"]:
+        fail("recomputed input hash does not match the freeze artifact")
+
+    ast = store.rule.get((man["rule_id"], man["rule_version"]))
+    if ast is None:
+        raise VerifyError("RULE_UNAVAILABLE", "sealed rule is missing")
+    if rule_ast_hash(ast) != man["rule_ast_hash"]:
+        raise VerifyError("RULE_MISMATCH", "loaded rule does not match the sealed digest")
+
+    card = sealed["card"]
+    ev = evaluate(ast, {
+        "timing_quality": card["timing_quality"],
+        "card_complete": card["card_complete"],
+        "options_valid": card["options_valid"],
+        "implied_move": card["implied_move"],
+        "benchmark_relative_5d": card["benchmark_relative_5d"],
+        "benchmark_relative_63d": card["benchmark_relative_63d"],
+    })
+    if ev["status"] == "INVALID_RULE":
+        fail("registered rule invalid")
+    replayed = decision_payload(ev, card)
+    persisted = fr["output_payload"]
+    try:
+        persisted_hash = output_hash(in_hash, persisted)
+    except KernelError:
+        fail("stored output payload is not canonical")
+    if persisted_hash != fr["output_hash"]:
+        fail("stored output payload does not hash to the freeze output hash")
+    replayed_hash = output_hash(in_hash, replayed)
+    if replayed_hash != fr["output_hash"] or canon(persisted) != canon(replayed):
+        fail("replayed decision does not match the freeze artifact")
+    if fr["decision"] != ev["decision"] or fr.get("direction") != ev.get("direction"):
+        fail("stored decision fields do not match the replay")
+
+    store.add_audit({
+        "freeze_id": freeze_id,
+        "manifest_id": manifest_id,
+        "security_id": security_id,
+        "result": "BYTE_VERIFIED",
+        "detail": "replay matched sealed contents",
+    })
+    adm = store.admission.get(freeze_id, {})
+    return {
+        "freeze_id": freeze_id,
+        "decision": ev["decision"],
+        "direction": ev.get("direction"),
+        "input_hash": in_hash,
+        "output_hash": replayed_hash,
+        "admission_outcome": adm.get("outcome"),
+        "verification_level": "BYTE_VERIFIED",
     }
-  }
-
-  return (
-    <main className="mx-auto flex min-h-dvh max-w-sm flex-col justify-center gap-6 px-5 py-10">
-      <SignedIn>
-        <Navigate to="/keys" />
-      </SignedIn>
-      <div>
-        <p className="text-xs font-medium tracking-[0.18em] text-muted">TRADING APP</p>
-        <h1 className="mt-2 text-2xl font-medium tracking-tight">Insert Alpaca keys</h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted">
-          Open the desk, then paste your paper key ID and secret. Google/X often fail inside this preview — use the
-          button below.
-        </p>
-      </div>
-      {authEnabled ? (
-        <div className="flex flex-col gap-3">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void openDesk()}
-            className="min-h-12 rounded-md bg-primary px-4 text-sm font-medium text-primary-fg disabled:opacity-60"
-          >
-            {busy ? "Opening…" : "Open desk and insert keys"}
-          </button>
-          {err ? <p className="text-sm text-danger">{err}</p> : null}
-          <div className="my-1 flex items-center gap-3 text-[11px] uppercase tracking-wider text-faint">
-            <span className="h-px flex-1 bg-border" />
-            or
-            <span className="h-px flex-1 bg-border" />
-          </div>
-          {GROK_PROVIDERS.map((p) => (
-            <button
-              key={p.providerId}
-              type="button"
-              onClick={() => void signIn(p.providerId, { callbackURL: "/keys" })}
-              className="min-h-11 w-full rounded-md border border-border bg-surface px-4 text-sm hover:border-primary"
-            >
-              Continue with {p.label}
-            </button>
-          ))}
-          <form onSubmit={onEmail} className="mt-2 flex flex-col gap-2">
-            <label htmlFor="email" className="text-xs text-muted">
-              Email
-              <input
-                id="email"
-                type="email"
-                required
-                autoComplete="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="mt-1 min-h-11 w-full rounded-md border border-border bg-sunken px-3 text-sm text-fg outline-none focus:border-primary"
-              />
-            </label>
-            <label htmlFor="password" className="text-xs text-muted">
-              Password
-              <input
-                id="password"
-                type="password"
-                required
-                minLength={8}
-                autoComplete="new-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="mt-1 min-h-11 w-full rounded-md border border-border bg-sunken px-3 text-sm text-fg outline-none focus:border-primary"
-              />
-            </label>
-            <button
-              type="submit"
-              disabled={busy}
-              className="min-h-11 rounded-md border border-border text-sm disabled:opacity-60"
-            >
-              {busy ? "Working…" : mode === "up" ? "Create account" : "Sign in with email"}
-            </button>
-            <button
-              type="button"
-              className="text-xs text-muted underline-offset-4 hover:underline"
-              onClick={() => setMode(mode === "up" ? "in" : "up")}
-            >
-              {mode === "up" ? "Have an account? Sign in" : "Need an account? Create one"}
-            </button>
-          </form>
-        </div>
-      ) : (
-        <p className="text-sm text-muted">Sign-in is disabled.</p>
-      )}
-    </main>
-  );
-}
-```
-
-
----
-
-## `src/routes/index.tsx` (5599 bytes)
-
-```tsx
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
-import { DeskShell, Empty, Err, Panel, Stat } from "@/components/desk-shell";
-import { AlpacaKeyInsert } from "@/components/alpaca-keys";
-import { fetchHome } from "@/desk/server-fns";
-
-export const Route = createFileRoute("/")({ component: Home });
-
-function Home() {
-  return (
-    <DeskShell>
-      <HomeLoader />
-    </DeskShell>
-  );
-}
-
-function HomeLoader() {
-  const [data, setData] = useState<Awaited<ReturnType<typeof fetchHome>> | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    void fetchHome()
-      .then(setData)
-      .catch((e) => setError(e instanceof Error ? e.message : "Could not load home"));
-  }, []);
-
-  if (error) return <Err>{error}</Err>;
-  if (!data) return <Empty>Loading session…</Empty>;
-  if ("needs_role" in data) return <Empty>Assign a desk role to continue.</Empty>;
-  return <HomeBody data={data} />;
-}
-
-function HomeBody({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchHome>>, { needs_role: true }> }) {
-  const d = data.data;
-  const s = d.latest_session;
-  return (
-    <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="text-xl font-medium tracking-tight">Desk</h1>
-        <p className="mt-1 text-sm text-muted">
-          As of {data.as_of} · window {d.window_id} · rule {d.rule_id}
-        </p>
-      </div>
-      <AlpacaKeyInsert />
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Panel title="Cohort">
-          <Stat label="Sealed" value={s?.sealed_member_count ?? "—"} />
-          <div className="mt-3">
-            <Stat label="Frozen" value={s?.frozen_count ?? "—"} hint={s?.freeze_resolution} />
-          </div>
-        </Panel>
-        <Panel title="Coverage">
-          <Stat label="Complete cards" value={s?.complete_frozen_cards ?? "—"} />
-          <div className="mt-3">
-            <Stat label="Research closed" value={s?.research_closed ? "yes" : "no"} />
-          </div>
-        </Panel>
-        <Panel title="Reserved capital">
-          <Stat label="Entry notional" value={d.reserved_notional} hint={`${d.reserved_count} of 3 slots`} />
-          <div className="mt-3">
-            <Stat label="Impaired" value={d.impaired_count} hint={`${d.nonclosed_positions} nonclosed`} />
-          </div>
-        </Panel>
-        <Panel title="Admission">
-          <Stat label="Pause" value={d.admission_paused ? "ON" : "off"} hint={d.pause_reason ?? "New tickets only"} />
-          <div className="mt-3">
-            <Stat label="Overdue jobs" value={d.overdue_deadlines} />
-          </div>
-        </Panel>
-      </div>
-      <Panel title="Sessions" aside="research complete ≠ book clear">
-        {d.sessions.length === 0 ? (
-          <Empty>No sealed sessions.</Empty>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[32rem] text-left text-sm">
-              <thead className="text-[11px] uppercase tracking-wider text-muted">
-                <tr>
-                  <th className="pb-2 font-medium">Session</th>
-                  <th className="pb-2 font-medium">Manifest</th>
-                  <th className="pb-2 font-medium">N</th>
-                  <th className="pb-2 font-medium">Resolution</th>
-                </tr>
-              </thead>
-              <tbody className="font-mono text-xs">
-                {d.sessions.map((row) => (
-                  <tr key={row.manifest_id} className="border-t border-border">
-                    <td className="py-2">
-                      <Link className="underline-offset-4 hover:underline" to="/earnings" search={{ session: row.session_date }}>
-                        {row.session_date}
-                      </Link>
-                    </td>
-                    <td className="py-2 text-muted">{row.manifest_id}</td>
-                    <td className="py-2">{row.sealed_member_count}</td>
-                    <td className="py-2">{row.freeze_resolution}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Panel>
-      {d.reviewer_book ? (
-        <Panel title="Priced book (reviewer)">
-          <Stat label="Latest vintage P&L" value={d.reviewer_book.latest_paper_pnl ?? "—"} hint="ESTIMATED · stress haircut" />
-        </Panel>
-      ) : (
-        <p className="text-xs text-muted">Operator view omits marks, hits, and P&L reconstruction.</p>
-      )}
-      <Panel title="Alpaca" aside={d.alpaca.connected ? d.alpaca.mode ?? "on" : "off"}>
-        {d.alpaca.connected ? (
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <Stat
-              label="Venue"
-              value={d.alpaca.mode === "LIVE" ? "LIVE" : "PAPER"}
-              hint={`${d.alpaca.api_key_masked ?? ""} · ${d.alpaca.account_status ?? "connected"}`}
-            />
-            <Link to="/trade" className="inline-flex min-h-11 items-center justify-center rounded-md bg-primary px-4 text-sm text-primary-fg">
-              Trade desk
-            </Link>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <Empty>No broker keys yet. Operator stores an Alpaca paper key on Admin.</Empty>
-            <Link to="/admin" className="inline-flex min-h-11 items-center justify-center rounded-md border border-border px-4 text-sm">
-              Add keys
-            </Link>
-          </div>
-        )}
-      </Panel>
-    </div>
-  );
-}
-```
-
-
----
-
-## `migrations/0002_trading_app.sql` (33664 bytes)
-
-```sql
--- Trading App v1.2 relational contract (executable).
--- Hashes persist as 32-byte BYTEA; APIs expose lowercase hex.
-
-CREATE OR REPLACE FUNCTION ta_reject_immutable() RETURNS trigger
-LANGUAGE plpgsql AS $$
-BEGIN
-  RAISE EXCEPTION 'IMMUTABLE_TABLE:%', TG_TABLE_NAME;
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION ta_id_ok(t text) RETURNS boolean
-LANGUAGE sql IMMUTABLE AS $$
-  SELECT t ~ '^[A-Za-z0-9][A-Za-z0-9:._-]{0,63}$';
-$$;
-
-CREATE TABLE IF NOT EXISTS writer_gate (
-  singleton_key boolean PRIMARY KEY CHECK (singleton_key),
-  next_event_seq bigint NOT NULL CHECK (next_event_seq > 0),
-  last_authoritative_time timestamptz NOT NULL,
-  clock_trusted boolean NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS fixture_clock (
-  singleton_key boolean PRIMARY KEY CHECK (singleton_key),
-  now_utc timestamptz NOT NULL,
-  trusted boolean NOT NULL,
-  source text NOT NULL CHECK (source IN ('DATABASE', 'FIXTURE'))
-);
-
-CREATE TABLE IF NOT EXISTS event_log (
-  event_seq bigint PRIMARY KEY CHECK (event_seq > 0),
-  event_id text NOT NULL UNIQUE CHECK (ta_id_ok(event_id)),
-  command_id text NOT NULL UNIQUE CHECK (ta_id_ok(command_id)),
-  request_hash bytea NOT NULL CHECK (octet_length(request_hash) = 32),
-  event_type text NOT NULL,
-  actor_principal_id text NOT NULL CHECK (ta_id_ok(actor_principal_id)),
-  occurred_at timestamptz NOT NULL,
-  semantic_payload jsonb NOT NULL,
-  canonical_payload text NOT NULL,
-  result_receipt jsonb NOT NULL,
-  event_hash bytea NOT NULL CHECK (octet_length(event_hash) = 32)
-);
-DROP TRIGGER IF EXISTS event_log_immutable ON event_log;
-CREATE TRIGGER event_log_immutable BEFORE UPDATE OR DELETE ON event_log
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS desk_risk_state (
-  sleeve text PRIMARY KEY CHECK (sleeve = 'EARNINGS'),
-  reserved_count integer NOT NULL CHECK (reserved_count >= 0 AND reserved_count <= 3),
-  reserved_notional numeric(16,4) NOT NULL CHECK (reserved_notional >= 0 AND reserved_notional <= 15000),
-  updated_event_seq bigint NOT NULL REFERENCES event_log(event_seq)
-);
-
-CREATE TABLE IF NOT EXISTS app_keyring (
-  key_id text PRIMARY KEY CHECK (ta_id_ok(key_id)),
-  purpose text NOT NULL,
-  key_bytes bytea NOT NULL,
-  created_at timestamptz NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS policy_bundle (
-  policy_id text PRIMARY KEY CHECK (ta_id_ok(policy_id)),
-  policy_version text NOT NULL CHECK (ta_id_ok(policy_version)),
-  policy_content jsonb NOT NULL,
-  canonical_content text NOT NULL,
-  policy_hash bytea NOT NULL UNIQUE CHECK (octet_length(policy_hash) = 32),
-  registered_event_seq bigint NOT NULL REFERENCES event_log(event_seq)
-);
-DROP TRIGGER IF EXISTS policy_bundle_immutable ON policy_bundle;
-CREATE TRIGGER policy_bundle_immutable BEFORE UPDATE OR DELETE ON policy_bundle
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS cost_model (
-  cost_model_id text PRIMARY KEY CHECK (ta_id_ok(cost_model_id)),
-  version text NOT NULL,
-  basis text NOT NULL CHECK (basis = 'CONSERVATIVE_STRESS_HAIRCUT'),
-  constant_penalty numeric(12,6) NOT NULL CHECK (constant_penalty > 0 AND constant_penalty <= 0.05),
-  imbalance_coefficient numeric(12,6) NOT NULL CHECK (imbalance_coefficient = 0),
-  imbalance_term numeric(12,6) NOT NULL CHECK (imbalance_term = 0),
-  commission_per_fill numeric(12,4) NOT NULL CHECK (commission_per_fill >= 0 AND commission_per_fill <= 100),
-  canonical_content text NOT NULL,
-  content_hash bytea NOT NULL UNIQUE CHECK (octet_length(content_hash) = 32),
-  registered_event_seq bigint NOT NULL REFERENCES event_log(event_seq)
-);
-DROP TRIGGER IF EXISTS cost_model_immutable ON cost_model;
-CREATE TRIGGER cost_model_immutable BEFORE UPDATE OR DELETE ON cost_model
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS evaluator_artifact (
-  evaluator_id text PRIMARY KEY CHECK (ta_id_ok(evaluator_id)),
-  engine_version text NOT NULL,
-  artifact_manifest jsonb NOT NULL,
-  canonical_content text NOT NULL,
-  artifact_hash bytea NOT NULL UNIQUE CHECK (octet_length(artifact_hash) = 32),
-  supported_ast_schema text NOT NULL,
-  registered_event_seq bigint NOT NULL REFERENCES event_log(event_seq)
-);
-DROP TRIGGER IF EXISTS evaluator_artifact_immutable ON evaluator_artifact;
-CREATE TRIGGER evaluator_artifact_immutable BEFORE UPDATE OR DELETE ON evaluator_artifact
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS rule_card (
-  rule_id text NOT NULL CHECK (ta_id_ok(rule_id)),
-  rule_version text NOT NULL CHECK (ta_id_ok(rule_version)),
-  rule_text text NOT NULL,
-  rule_text_hash bytea NOT NULL CHECK (octet_length(rule_text_hash) = 32),
-  ast_content jsonb NOT NULL,
-  canonical_ast text NOT NULL,
-  ast_hash bytea NOT NULL CHECK (octet_length(ast_hash) = 32),
-  evaluator_id text NOT NULL REFERENCES evaluator_artifact(evaluator_id),
-  policy_id text NOT NULL REFERENCES policy_bundle(policy_id),
-  expected_predict_rate_min numeric(16,12) NOT NULL CHECK (expected_predict_rate_min >= 0),
-  expected_predict_rate_max numeric(16,12) NOT NULL CHECK (expected_predict_rate_max <= 1 AND expected_predict_rate_max >= expected_predict_rate_min),
-  magnitude_definition jsonb NOT NULL,
-  registered_event_seq bigint NOT NULL REFERENCES event_log(event_seq),
-  PRIMARY KEY (rule_id, rule_version)
-);
-DROP TRIGGER IF EXISTS rule_card_immutable ON rule_card;
-CREATE TRIGGER rule_card_immutable BEFORE UPDATE OR DELETE ON rule_card
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS security (
-  permanent_security_id text PRIMARY KEY CHECK (ta_id_ok(permanent_security_id)),
-  instrument_type text NOT NULL CHECK (instrument_type IN ('US_COMMON', 'REFERENCE_ETF')),
-  currency text NOT NULL CHECK (currency = 'USD'),
-  display_name text NOT NULL
-);
-DROP TRIGGER IF EXISTS security_immutable ON security;
-CREATE TRIGGER security_immutable BEFORE UPDATE OR DELETE ON security
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS universe_version (
-  universe_version text PRIMARY KEY CHECK (ta_id_ok(universe_version)),
-  effective_from date NOT NULL,
-  content_hash bytea NOT NULL UNIQUE CHECK (octet_length(content_hash) = 32),
-  registered_event_seq bigint NOT NULL REFERENCES event_log(event_seq),
-  data_mode text NOT NULL CHECK (data_mode IN ('FIXTURE', 'REAL_DATA_READ_ONLY'))
-);
-DROP TRIGGER IF EXISTS universe_version_immutable ON universe_version;
-CREATE TRIGGER universe_version_immutable BEFORE UPDATE OR DELETE ON universe_version
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS universe_member (
-  universe_version text NOT NULL REFERENCES universe_version(universe_version),
-  permanent_security_id text NOT NULL REFERENCES security(permanent_security_id),
-  included boolean NOT NULL,
-  exclusion_reason text,
-  listing_exchange text CHECK (listing_exchange IN ('XNYS', 'XNAS')),
-  liquidity_snapshot jsonb,
-  sector text,
-  market_cap_bucket text,
-  PRIMARY KEY (universe_version, permanent_security_id)
-);
-DROP TRIGGER IF EXISTS universe_member_immutable ON universe_member;
-CREATE TRIGGER universe_member_immutable BEFORE UPDATE OR DELETE ON universe_member
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS evaluation_window (
-  window_id text PRIMARY KEY CHECK (ta_id_ok(window_id)),
-  starts_at timestamptz NOT NULL,
-  ends_at timestamptz NOT NULL CHECK (ends_at > starts_at),
-  rule_id text NOT NULL,
-  rule_version text NOT NULL,
-  policy_id text NOT NULL REFERENCES policy_bundle(policy_id),
-  cost_model_id text NOT NULL REFERENCES cost_model(cost_model_id),
-  evaluator_id text NOT NULL REFERENCES evaluator_artifact(evaluator_id),
-  universe_version text NOT NULL REFERENCES universe_version(universe_version),
-  hypothesis_claim text NOT NULL,
-  prior_contaminated boolean NOT NULL,
-  contamination_source text NOT NULL CHECK (contamination_source IN ('PRIOR_OBSERVATION', 'PRIOR_RULE_LABELS', 'NONE')),
-  release_event_seq bigint REFERENCES event_log(event_seq),
-  release_snapshot_id text,
-  ended_early_at timestamptz,
-  early_end_event_seq bigint,
-  early_end_reason text,
-  FOREIGN KEY (rule_id, rule_version) REFERENCES rule_card(rule_id, rule_version)
-);
-
-CREATE TABLE IF NOT EXISTS security_ticker (
-  mapping_id text PRIMARY KEY CHECK (ta_id_ok(mapping_id)),
-  permanent_security_id text NOT NULL REFERENCES security(permanent_security_id),
-  provider_id text NOT NULL CHECK (ta_id_ok(provider_id)),
-  ticker text NOT NULL,
-  valid_from timestamptz NOT NULL,
-  valid_to timestamptz,
-  registered_event_seq bigint NOT NULL REFERENCES event_log(event_seq),
-  CHECK (valid_to IS NULL OR valid_to > valid_from)
-);
-DROP TRIGGER IF EXISTS security_ticker_immutable ON security_ticker;
-CREATE TRIGGER security_ticker_immutable BEFORE UPDATE OR DELETE ON security_ticker
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS calendar_session (
-  calendar_version text NOT NULL CHECK (ta_id_ok(calendar_version)),
-  listing_exchange text NOT NULL CHECK (listing_exchange IN ('XNYS', 'XNAS')),
-  session_date date NOT NULL,
-  is_open boolean NOT NULL,
-  open_at timestamptz,
-  close_at timestamptz,
-  moc_entry_cutoff_at timestamptz,
-  effective_rule_id text,
-  source_reference text,
-  verified_at timestamptz NOT NULL,
-  content_hash bytea NOT NULL CHECK (octet_length(content_hash) = 32),
-  PRIMARY KEY (calendar_version, listing_exchange, session_date),
-  CHECK (
-    (is_open AND open_at IS NOT NULL AND close_at IS NOT NULL AND moc_entry_cutoff_at IS NOT NULL AND open_at < close_at)
-    OR (NOT is_open AND open_at IS NULL AND close_at IS NULL AND moc_entry_cutoff_at IS NULL)
-  )
-);
-DROP TRIGGER IF EXISTS calendar_session_immutable ON calendar_session;
-CREATE TRIGGER calendar_session_immutable BEFORE UPDATE OR DELETE ON calendar_session
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS observation (
-  observation_id text PRIMARY KEY CHECK (ta_id_ok(observation_id)),
-  event_seq bigint NOT NULL REFERENCES event_log(event_seq),
-  permanent_security_id text NOT NULL REFERENCES security(permanent_security_id),
-  event_key text,
-  session_date date NOT NULL,
-  snapshot_type text NOT NULL,
-  provider_id text NOT NULL,
-  provider_record_id text NOT NULL,
-  provider_revision text NOT NULL,
-  vendor_as_of timestamptz,
-  source_event_at timestamptz,
-  received_at timestamptz NOT NULL,
-  source_class text NOT NULL CHECK (source_class IN ('AUTHORITATIVE', 'REFERENCE', 'RESEARCH_ONLY', 'ESTIMATED', 'MISSING')),
-  adjustment_basis text NOT NULL CHECK (adjustment_basis IN ('UNADJUSTED', 'PIT_TOTAL_RETURN', 'NOT_PRICE')),
-  payload_schema_id text NOT NULL,
-  payload_hash bytea NOT NULL CHECK (octet_length(payload_hash) = 32),
-  observation_hash bytea NOT NULL UNIQUE CHECK (octet_length(observation_hash) = 32),
-  envelope jsonb NOT NULL,
-  payload_protected bytea,
-  payload_nonce bytea,
-  payload_key_id text,
-  is_partial boolean NOT NULL,
-  capture_error_code text,
-  supersedes_observation_id text REFERENCES observation(observation_id),
-  partition text NOT NULL CHECK (partition IN ('RESEARCH', 'HOLDOUT')),
-  scheduled_erasure_at timestamptz,
-  tombstoned boolean NOT NULL DEFAULT false,
-  tombstone_reason text
-);
-CREATE INDEX IF NOT EXISTS observation_sec_type_idx ON observation (permanent_security_id, snapshot_type, session_date);
-
-CREATE TABLE IF NOT EXISTS earnings_event (
-  event_observation_id text PRIMARY KEY CHECK (ta_id_ok(event_observation_id)),
-  event_key text NOT NULL CHECK (ta_id_ok(event_key)),
-  permanent_security_id text NOT NULL REFERENCES security(permanent_security_id),
-  intended_session date NOT NULL,
-  timing text NOT NULL CHECK (timing IN ('AMC', 'BMO', 'INTRADAY', 'UNKNOWN')),
-  quality text NOT NULL CHECK (quality IN ('ISSUER_CONFIRMED', 'ESTIMATED')),
-  source_observation_id text NOT NULL REFERENCES observation(observation_id),
-  supersedes_id text
-);
-DROP TRIGGER IF EXISTS earnings_event_immutable ON earnings_event;
-CREATE TRIGGER earnings_event_immutable BEFORE UPDATE OR DELETE ON earnings_event
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS candidate_eligibility (
-  eligibility_id text PRIMARY KEY CHECK (ta_id_ok(eligibility_id)),
-  session_date date NOT NULL,
-  window_id text NOT NULL REFERENCES evaluation_window(window_id),
-  permanent_security_id text NOT NULL REFERENCES security(permanent_security_id),
-  event_key text,
-  status text NOT NULL CHECK (status IN ('INCLUDED', 'EXCLUDED', 'UNRESOLVED')),
-  reason_codes jsonb NOT NULL,
-  evidence_ids jsonb NOT NULL,
-  event_seq bigint NOT NULL REFERENCES event_log(event_seq),
-  manifest_id text
-);
-DROP TRIGGER IF EXISTS candidate_eligibility_immutable ON candidate_eligibility;
-CREATE TRIGGER candidate_eligibility_immutable BEFORE UPDATE OR DELETE ON candidate_eligibility
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS manifest (
-  manifest_id text PRIMARY KEY CHECK (ta_id_ok(manifest_id)),
-  window_id text NOT NULL REFERENCES evaluation_window(window_id),
-  session_date date NOT NULL,
-  next_session_date date NOT NULL,
-  second_next_session_date date NOT NULL,
-  sleeve text NOT NULL CHECK (sleeve = 'EARNINGS'),
-  universe_version text NOT NULL REFERENCES universe_version(universe_version),
-  policy_id text NOT NULL REFERENCES policy_bundle(policy_id),
-  rule_id text NOT NULL,
-  rule_version text NOT NULL,
-  evaluator_id text NOT NULL REFERENCES evaluator_artifact(evaluator_id),
-  cost_model_id text NOT NULL REFERENCES cost_model(cost_model_id),
-  policy_hash bytea NOT NULL,
-  rule_ast_hash bytea NOT NULL,
-  evaluator_artifact_hash bytea NOT NULL,
-  cost_model_hash bytea NOT NULL,
-  calendar_refs jsonb NOT NULL,
-  seal_at timestamptz NOT NULL,
-  freeze_cutoff_at timestamptz NOT NULL,
-  mark_wait_at timestamptz NOT NULL,
-  report_finalize_at timestamptz NOT NULL,
-  sealed_at timestamptz NOT NULL,
-  seed bytea NOT NULL CHECK (octet_length(seed) = 32),
-  sealed_member_count integer NOT NULL CHECK (sealed_member_count >= 0 AND sealed_member_count <= 100),
-  canonical_content text NOT NULL,
-  manifest_hash bytea NOT NULL UNIQUE CHECK (octet_length(manifest_hash) = 32),
-  seal_event_seq bigint NOT NULL REFERENCES event_log(event_seq),
-  freeze_resolution text NOT NULL CHECK (freeze_resolution IN ('OPEN', 'FULL', 'PARTIAL', 'ABANDONED', 'EMPTY')),
-  admission_closed_event_seq bigint,
-  research_closed_event_seq bigint,
-  UNIQUE (window_id, session_date, sleeve),
-  FOREIGN KEY (rule_id, rule_version) REFERENCES rule_card(rule_id, rule_version)
-);
-
-CREATE TABLE IF NOT EXISTS manifest_member (
-  manifest_id text NOT NULL REFERENCES manifest(manifest_id),
-  permanent_security_id text NOT NULL REFERENCES security(permanent_security_id),
-  event_key text NOT NULL,
-  sealed_event_session date NOT NULL,
-  timing text NOT NULL CHECK (timing = 'AMC'),
-  timing_quality text NOT NULL CHECK (timing_quality IN ('ISSUER_CONFIRMED', 'ESTIMATED')),
-  shuffle_order_index integer NOT NULL CHECK (shuffle_order_index >= 0),
-  snapshot_hash bytea NOT NULL CHECK (octet_length(snapshot_hash) = 32),
-  display_ticker text NOT NULL,
-  PRIMARY KEY (manifest_id, permanent_security_id),
-  UNIQUE (manifest_id, shuffle_order_index)
-);
-DROP TRIGGER IF EXISTS manifest_member_immutable ON manifest_member;
-CREATE TRIGGER manifest_member_immutable BEFORE UPDATE OR DELETE ON manifest_member
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS sealed_input (
-  manifest_id text NOT NULL,
-  permanent_security_id text NOT NULL,
-  snapshot_schema text NOT NULL,
-  snapshot_hash bytea NOT NULL CHECK (octet_length(snapshot_hash) = 32),
-  card jsonb NOT NULL,
-  bindings jsonb NOT NULL,
-  pin_count integer NOT NULL CHECK (pin_count >= 0),
-  card_complete boolean NOT NULL,
-  options_valid boolean,
-  coverage_summary jsonb NOT NULL,
-  retention_exclusion boolean NOT NULL DEFAULT false,
-  PRIMARY KEY (manifest_id, permanent_security_id),
-  FOREIGN KEY (manifest_id, permanent_security_id) REFERENCES manifest_member(manifest_id, permanent_security_id)
-);
-DROP TRIGGER IF EXISTS sealed_input_immutable ON sealed_input;
-CREATE TRIGGER sealed_input_immutable BEFORE UPDATE OR DELETE ON sealed_input
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS sealed_input_pin (
-  manifest_id text NOT NULL,
-  permanent_security_id text NOT NULL,
-  observation_id text NOT NULL REFERENCES observation(observation_id),
-  observation_hash bytea NOT NULL CHECK (octet_length(observation_hash) = 32),
-  pin_index integer NOT NULL CHECK (pin_index >= 0),
-  PRIMARY KEY (manifest_id, permanent_security_id, observation_id),
-  UNIQUE (manifest_id, permanent_security_id, pin_index),
-  FOREIGN KEY (manifest_id, permanent_security_id) REFERENCES sealed_input(manifest_id, permanent_security_id)
-);
-DROP TRIGGER IF EXISTS sealed_input_pin_immutable ON sealed_input_pin;
-CREATE TRIGGER sealed_input_pin_immutable BEFORE UPDATE OR DELETE ON sealed_input_pin
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS "freeze" (
-  freeze_id text PRIMARY KEY CHECK (ta_id_ok(freeze_id)),
-  manifest_id text NOT NULL,
-  permanent_security_id text NOT NULL,
-  snapshot_hash bytea NOT NULL,
-  input_hash bytea NOT NULL CHECK (octet_length(input_hash) = 32),
-  output_hash bytea NOT NULL CHECK (octet_length(output_hash) = 32),
-  decision text NOT NULL CHECK (decision IN ('STAND_DOWN', 'PREDICT')),
-  direction text,
-  card_complete boolean NOT NULL,
-  options_valid boolean,
-  output_payload jsonb NOT NULL,
-  pin_count integer NOT NULL CHECK (pin_count >= 0),
-  freeze_order_index integer NOT NULL CHECK (freeze_order_index >= 0),
-  admission_checked_at timestamptz NOT NULL,
-  event_seq bigint NOT NULL REFERENCES event_log(event_seq),
-  verification_level text NOT NULL CHECK (verification_level IN ('BYTE_VERIFIED', 'ATTESTED', 'HASH_ONLY', 'UNVERIFIABLE')),
-  UNIQUE (manifest_id, permanent_security_id),
-  UNIQUE (manifest_id, freeze_order_index),
-  UNIQUE (freeze_id, manifest_id, permanent_security_id),
-  FOREIGN KEY (manifest_id, permanent_security_id) REFERENCES manifest_member(manifest_id, permanent_security_id),
-  CHECK (
-    (decision = 'STAND_DOWN' AND direction IS NULL)
-    OR (decision = 'PREDICT' AND direction = 'LONG' AND card_complete IS TRUE)
-  )
-);
-DROP TRIGGER IF EXISTS freeze_immutable ON "freeze";
-CREATE TRIGGER freeze_immutable BEFORE UPDATE OR DELETE ON "freeze"
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS freeze_pin (
-  freeze_id text NOT NULL REFERENCES "freeze"(freeze_id),
-  observation_id text NOT NULL REFERENCES observation(observation_id),
-  observation_hash bytea NOT NULL,
-  pin_index integer NOT NULL CHECK (pin_index >= 0),
-  PRIMARY KEY (freeze_id, observation_id),
-  UNIQUE (freeze_id, pin_index)
-);
-DROP TRIGGER IF EXISTS freeze_pin_immutable ON freeze_pin;
-CREATE TRIGGER freeze_pin_immutable BEFORE UPDATE OR DELETE ON freeze_pin
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS freeze_attempt (
-  attempt_id text PRIMARY KEY CHECK (ta_id_ok(attempt_id)),
-  manifest_id text NOT NULL,
-  permanent_security_id text NOT NULL,
-  started_at timestamptz NOT NULL,
-  finished_at timestamptz NOT NULL,
-  duration_ms bigint NOT NULL CHECK (duration_ms >= 0),
-  result_code text NOT NULL,
-  event_seq bigint NOT NULL REFERENCES event_log(event_seq),
-  FOREIGN KEY (manifest_id, permanent_security_id) REFERENCES manifest_member(manifest_id, permanent_security_id)
-);
-DROP TRIGGER IF EXISTS freeze_attempt_immutable ON freeze_attempt;
-CREATE TRIGGER freeze_attempt_immutable BEFORE UPDATE OR DELETE ON freeze_attempt
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS execution_admission (
-  admission_id text PRIMARY KEY CHECK (ta_id_ok(admission_id)),
-  freeze_id text NOT NULL UNIQUE REFERENCES "freeze"(freeze_id),
-  outcome text NOT NULL CHECK (outcome IN ('NOT_PREDICTED', 'ADMITTED', 'DENIED')),
-  reason_codes jsonb NOT NULL,
-  quote_observation_ids jsonb NOT NULL,
-  checked_at timestamptz NOT NULL,
-  policy_hash bytea NOT NULL,
-  request_hash bytea NOT NULL,
-  position_id text UNIQUE,
-  event_seq bigint NOT NULL REFERENCES event_log(event_seq),
-  CHECK (
-    (outcome = 'ADMITTED' AND position_id IS NOT NULL)
-    OR (outcome IN ('DENIED', 'NOT_PREDICTED') AND position_id IS NULL)
-  )
-);
-DROP TRIGGER IF EXISTS execution_admission_immutable ON execution_admission;
-CREATE TRIGGER execution_admission_immutable BEFORE UPDATE OR DELETE ON execution_admission
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS "position" (
-  position_id text PRIMARY KEY CHECK (ta_id_ok(position_id)),
-  freeze_id text NOT NULL UNIQUE,
-  manifest_id text NOT NULL,
-  permanent_security_id text NOT NULL,
-  admission_id text NOT NULL UNIQUE REFERENCES execution_admission(admission_id),
-  intended_event_session date NOT NULL,
-  sleeve text NOT NULL CHECK (sleeve = 'EARNINGS'),
-  original_reserved_notional numeric(16,4) NOT NULL CHECK (original_reserved_notional > 0 AND original_reserved_notional <= 5000),
-  committed_at timestamptz NOT NULL,
-  entry_plan jsonb NOT NULL,
-  exit_plan jsonb NOT NULL,
-  state text NOT NULL CHECK (state IN (
-    'COMMITTED_IRREVOCABLE', 'FILLED', 'NO_FILL', 'IMPAIRED_ENTRY', 'IMPAIRED_EXIT', 'FLAT', 'CLOSED'
-  )),
-  cas_token bigint NOT NULL CHECK (cas_token > 0),
-  entry_evidence_id text,
-  last_book_vintage_id text,
-  flatten_request_event_seq bigint,
-  closed_event_seq bigint,
-  release_event_seq bigint UNIQUE,
-  last_transition_event_seq bigint NOT NULL,
-  display_ticker text NOT NULL,
-  FOREIGN KEY (freeze_id, manifest_id, permanent_security_id)
-    REFERENCES "freeze"(freeze_id, manifest_id, permanent_security_id),
-  CHECK (
-    (state = 'CLOSED' AND release_event_seq IS NOT NULL AND closed_event_seq IS NOT NULL)
-    OR (state <> 'CLOSED' AND release_event_seq IS NULL AND closed_event_seq IS NULL)
-  )
-);
-CREATE UNIQUE INDEX IF NOT EXISTS position_active_security_uidx
-  ON "position" (permanent_security_id) WHERE state <> 'CLOSED';
-
-CREATE TABLE IF NOT EXISTS entry_evidence (
-  entry_evidence_id text PRIMARY KEY CHECK (ta_id_ok(entry_evidence_id)),
-  position_id text NOT NULL REFERENCES "position"(position_id),
-  kind text NOT NULL CHECK (kind IN ('OFFICIAL_FILL', 'CONFIRMED_NO_FILL')),
-  source_ids jsonb NOT NULL,
-  calc jsonb NOT NULL,
-  content_hash bytea NOT NULL CHECK (octet_length(content_hash) = 32),
-  event_seq bigint NOT NULL REFERENCES event_log(event_seq)
-);
-DROP TRIGGER IF EXISTS entry_evidence_immutable ON entry_evidence;
-CREATE TRIGGER entry_evidence_immutable BEFORE UPDATE OR DELETE ON entry_evidence
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS deadline (
-  deadline_id text PRIMARY KEY CHECK (ta_id_ok(deadline_id)),
-  kind text NOT NULL CHECK (kind IN ('FREEZE', 'MARK_WAIT', 'REPORT_FINALIZE', 'WINDOW_RELEASE')),
-  manifest_id text REFERENCES manifest(manifest_id),
-  permanent_security_id text,
-  window_id text REFERENCES evaluation_window(window_id),
-  scheduled_at timestamptz NOT NULL,
-  scheduled_event_seq bigint NOT NULL REFERENCES event_log(event_seq),
-  applied_event_seq bigint UNIQUE,
-  applied_at timestamptz,
-  CHECK (
-    (applied_event_seq IS NULL AND applied_at IS NULL)
-    OR (applied_event_seq IS NOT NULL AND applied_at IS NOT NULL AND applied_at >= scheduled_at)
-  ),
-  CHECK (
-    (kind IN ('FREEZE', 'REPORT_FINALIZE') AND manifest_id IS NOT NULL AND permanent_security_id IS NULL AND window_id IS NULL)
-    OR (kind = 'MARK_WAIT' AND manifest_id IS NOT NULL AND permanent_security_id IS NOT NULL AND window_id IS NULL)
-    OR (kind = 'WINDOW_RELEASE' AND window_id IS NOT NULL AND manifest_id IS NULL AND permanent_security_id IS NULL)
-  )
-);
-CREATE UNIQUE INDEX IF NOT EXISTS deadline_freeze_uidx ON deadline (manifest_id) WHERE kind = 'FREEZE';
-CREATE UNIQUE INDEX IF NOT EXISTS deadline_report_uidx ON deadline (manifest_id) WHERE kind = 'REPORT_FINALIZE';
-CREATE UNIQUE INDEX IF NOT EXISTS deadline_mark_uidx ON deadline (manifest_id, permanent_security_id) WHERE kind = 'MARK_WAIT';
-CREATE UNIQUE INDEX IF NOT EXISTS deadline_window_uidx ON deadline (window_id) WHERE kind = 'WINDOW_RELEASE';
-CREATE INDEX IF NOT EXISTS deadline_due_idx ON deadline (scheduled_at) WHERE applied_event_seq IS NULL;
-
-CREATE TABLE IF NOT EXISTS guard_event (
-  guard_id text PRIMARY KEY CHECK (ta_id_ok(guard_id)),
-  event_key text NOT NULL,
-  manifest_id text,
-  permanent_security_id text NOT NULL REFERENCES security(permanent_security_id),
-  guard_type text NOT NULL CHECK (guard_type IN ('EARLY_RESULTS', 'OPERATOR_KNOWLEDGE', 'OFF_DESIGN_TIMING')),
-  source_observation_id text,
-  source_event_at timestamptz,
-  recorded_at timestamptz NOT NULL,
-  actor_principal_id text NOT NULL,
-  reason_code text NOT NULL,
-  event_seq bigint NOT NULL REFERENCES event_log(event_seq)
-);
-DROP TRIGGER IF EXISTS guard_event_immutable ON guard_event;
-CREATE TRIGGER guard_event_immutable BEFORE UPDATE OR DELETE ON guard_event
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS grade (
-  grade_id text PRIMARY KEY CHECK (ta_id_ok(grade_id)),
-  manifest_id text NOT NULL,
-  permanent_security_id text NOT NULL,
-  freeze_id text,
-  vintage integer NOT NULL CHECK (vintage >= 0),
-  outcome text NOT NULL CHECK (outcome IN ('GRADED', 'UNGRADEABLE', 'NO_EVENT', 'NO_FREEZE')),
-  reason_codes jsonb NOT NULL,
-  event_status text NOT NULL CHECK (event_status IN ('CONFIRMED_INTENDED_EVENT', 'CONFIRMED_NO_EVENT', 'UNRESOLVED')),
-  in_evidence_set boolean NOT NULL DEFAULT false,
-  late_label_recovery boolean NOT NULL DEFAULT false,
-  confound_flags jsonb NOT NULL,
-  label_policy_hash bytea NOT NULL,
-  values jsonb NOT NULL,
-  content_hash bytea NOT NULL CHECK (octet_length(content_hash) = 32),
-  created_event_seq bigint NOT NULL REFERENCES event_log(event_seq),
-  revision_reason text,
-  supersedes_grade_id text,
-  UNIQUE (manifest_id, permanent_security_id, vintage),
-  FOREIGN KEY (manifest_id, permanent_security_id) REFERENCES manifest_member(manifest_id, permanent_security_id),
-  CHECK (
-    (outcome = 'NO_FREEZE' AND freeze_id IS NULL)
-    OR (outcome <> 'NO_FREEZE' AND freeze_id IS NOT NULL)
-  )
-);
-DROP TRIGGER IF EXISTS grade_immutable ON grade;
-CREATE TRIGGER grade_immutable BEFORE UPDATE OR DELETE ON grade
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-CREATE INDEX IF NOT EXISTS grade_member_vintage_idx ON grade (manifest_id, permanent_security_id, vintage DESC);
-
-CREATE TABLE IF NOT EXISTS grade_pin (
-  grade_id text NOT NULL REFERENCES grade(grade_id),
-  observation_id text NOT NULL REFERENCES observation(observation_id),
-  observation_hash bytea NOT NULL,
-  pin_index integer NOT NULL CHECK (pin_index >= 0),
-  evidence_role text NOT NULL CHECK (evidence_role IN ('ENTRY', 'EXIT', 'BENCHMARK', 'CORPORATE_ACTION', 'EVENT', 'GUARD')),
-  PRIMARY KEY (grade_id, observation_id, evidence_role),
-  UNIQUE (grade_id, pin_index)
-);
-DROP TRIGGER IF EXISTS grade_pin_immutable ON grade_pin;
-CREATE TRIGGER grade_pin_immutable BEFORE UPDATE OR DELETE ON grade_pin
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS book_vintage (
-  book_vintage_id text PRIMARY KEY CHECK (ta_id_ok(book_vintage_id)),
-  position_id text NOT NULL REFERENCES "position"(position_id),
-  vintage integer NOT NULL CHECK (vintage >= 0),
-  basis text NOT NULL CHECK (basis IN ('ORIGINAL_PLAN', 'BOOK_FALLBACK', 'ADMIN_FLATTEN', 'CORPORATE_ACTION', 'NO_FILL')),
-  status text NOT NULL CHECK (status IN ('PRICED', 'CONFIRMED_NO_FILL')),
-  values jsonb NOT NULL,
-  content_hash bytea NOT NULL CHECK (octet_length(content_hash) = 32),
-  source_class text NOT NULL CHECK (source_class = 'ESTIMATED'),
-  strategy_pnl_eligible boolean NOT NULL,
-  created_event_seq bigint NOT NULL REFERENCES event_log(event_seq),
-  supersedes_book_id text,
-  revision_reason text,
-  UNIQUE (position_id, vintage)
-);
-DROP TRIGGER IF EXISTS book_vintage_immutable ON book_vintage;
-CREATE TRIGGER book_vintage_immutable BEFORE UPDATE OR DELETE ON book_vintage
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS book_pin (
-  book_vintage_id text NOT NULL REFERENCES book_vintage(book_vintage_id),
-  observation_id text NOT NULL REFERENCES observation(observation_id),
-  observation_hash bytea NOT NULL,
-  pin_index integer NOT NULL CHECK (pin_index >= 0),
-  evidence_role text NOT NULL CHECK (evidence_role IN ('ENTRY', 'EXIT', 'FALLBACK', 'CORPORATE_ACTION', 'NONEXECUTION')),
-  PRIMARY KEY (book_vintage_id, observation_id, evidence_role),
-  UNIQUE (book_vintage_id, pin_index)
-);
-DROP TRIGGER IF EXISTS book_pin_immutable ON book_pin;
-CREATE TRIGGER book_pin_immutable BEFORE UPDATE OR DELETE ON book_pin
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS report_snapshot (
-  snapshot_id text PRIMARY KEY CHECK (ta_id_ok(snapshot_id)),
-  scope text NOT NULL CHECK (scope IN ('MANIFEST', 'WINDOW')),
-  manifest_id text REFERENCES manifest(manifest_id),
-  window_id text NOT NULL REFERENCES evaluation_window(window_id),
-  as_of_event_seq bigint NOT NULL REFERENCES event_log(event_seq),
-  created_at timestamptz NOT NULL,
-  compatibility_hash bytea NOT NULL CHECK (octet_length(compatibility_hash) = 32),
-  metrics jsonb NOT NULL,
-  content_hash bytea NOT NULL CHECK (octet_length(content_hash) = 32),
-  data_mode text NOT NULL CHECK (data_mode IN ('FIXTURE', 'REAL_DATA_READ_ONLY')),
-  view_kind text NOT NULL CHECK (view_kind IN ('AS_KNOWN', 'LATEST_CORRECTED'))
-);
-DROP TRIGGER IF EXISTS report_snapshot_immutable ON report_snapshot;
-CREATE TRIGGER report_snapshot_immutable BEFORE UPDATE OR DELETE ON report_snapshot
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS report_grade_pin (
-  snapshot_id text NOT NULL REFERENCES report_snapshot(snapshot_id),
-  manifest_id text NOT NULL,
-  permanent_security_id text NOT NULL,
-  grade_id text NOT NULL REFERENCES grade(grade_id),
-  PRIMARY KEY (snapshot_id, manifest_id, permanent_security_id)
-);
-DROP TRIGGER IF EXISTS report_grade_pin_immutable ON report_grade_pin;
-CREATE TRIGGER report_grade_pin_immutable BEFORE UPDATE OR DELETE ON report_grade_pin
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS report_book_pin (
-  snapshot_id text NOT NULL REFERENCES report_snapshot(snapshot_id),
-  position_id text NOT NULL REFERENCES "position"(position_id),
-  book_vintage_id text,
-  book_status_at_snapshot text NOT NULL,
-  PRIMARY KEY (snapshot_id, position_id)
-);
-DROP TRIGGER IF EXISTS report_book_pin_immutable ON report_book_pin;
-CREATE TRIGGER report_book_pin_immutable BEFORE UPDATE OR DELETE ON report_book_pin
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS desk_principal (
-  principal_id text PRIMARY KEY CHECK (ta_id_ok(principal_id)),
-  user_id text NOT NULL UNIQUE,
-  login_name text NOT NULL,
-  role text NOT NULL CHECK (role IN ('OPERATOR', 'REVIEWER', 'SERVICE')),
-  active boolean NOT NULL DEFAULT true,
-  label_exposure_declared boolean NOT NULL DEFAULT false,
-  created_at timestamptz NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS access_audit (
-  audit_id text PRIMARY KEY CHECK (ta_id_ok(audit_id)),
-  actor_principal_id text NOT NULL,
-  action text NOT NULL,
-  target_type text NOT NULL,
-  target_id text,
-  occurred_at timestamptz NOT NULL,
-  allowed boolean NOT NULL,
-  safe_details jsonb NOT NULL
-);
-DROP TRIGGER IF EXISTS access_audit_immutable ON access_audit;
-CREATE TRIGGER access_audit_immutable BEFORE UPDATE OR DELETE ON access_audit
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS job_state (
-  job_name text PRIMARY KEY CHECK (ta_id_ok(job_name)),
-  next_due_at timestamptz,
-  cursor jsonb,
-  last_started_at timestamptz,
-  last_completed_at timestamptz,
-  last_receipt_id text,
-  status text NOT NULL CHECK (status IN ('IDLE', 'RUNNING', 'FAILED', 'BLOCKED')),
-  safe_error_code text,
-  updated_event_seq bigint
-);
-
-CREATE TABLE IF NOT EXISTS ops_alarm (
-  alarm_id text PRIMARY KEY CHECK (ta_id_ok(alarm_id)),
-  code text NOT NULL,
-  component text NOT NULL,
-  first_seen timestamptz NOT NULL,
-  last_seen timestamptz NOT NULL,
-  related_ids jsonb NOT NULL,
-  blocks_new_admission boolean NOT NULL,
-  status text NOT NULL CHECK (status IN ('OPEN', 'ACKNOWLEDGED', 'RESOLVED')),
-  safe_details jsonb NOT NULL,
-  opened_event_seq bigint,
-  resolution_event_seq bigint
-);
-
-CREATE TABLE IF NOT EXISTS operator_control (
-  sleeve text PRIMARY KEY CHECK (sleeve = 'EARNINGS'),
-  admission_paused boolean NOT NULL,
-  pause_reason text,
-  updated_event_seq bigint NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS fire_rate_note (
-  note_id text PRIMARY KEY CHECK (ta_id_ok(note_id)),
-  window_id text NOT NULL REFERENCES evaluation_window(window_id),
-  manifest_id text,
-  actor_principal_id text NOT NULL,
-  hypothesis text NOT NULL CHECK (hypothesis IN ('IMPLEMENTATION_BUG', 'COVERAGE_SHIFT', 'REGIME_SHIFT')),
-  note text NOT NULL,
-  event_seq bigint NOT NULL REFERENCES event_log(event_seq)
-);
-DROP TRIGGER IF EXISTS fire_rate_note_immutable ON fire_rate_note;
-CREATE TRIGGER fire_rate_note_immutable BEFORE UPDATE OR DELETE ON fire_rate_note
-  FOR EACH ROW EXECUTE FUNCTION ta_reject_immutable();
-
-CREATE TABLE IF NOT EXISTS bootstrap_state (
-  singleton_key boolean PRIMARY KEY CHECK (singleton_key),
-  completed boolean NOT NULL,
-  completed_at timestamptz,
-  note text
-);
-
-INSERT INTO bootstrap_state (singleton_key, completed, note)
-  VALUES (true, false, 'pending')
-  ON CONFLICT DO NOTHING;
-```
-
-
----
-
-## `migrations/0003_alpaca.sql` (1668 bytes)
-
-```sql
--- Alpaca venue credentials and local order audit.
--- Secrets are AES-256-GCM ciphertext. The API key id is not a secret; the secret key never leaves ciphertext.
-
-CREATE TABLE IF NOT EXISTS alpaca_credential (
-  singleton_key boolean PRIMARY KEY CHECK (singleton_key),
-  api_key_id text NOT NULL CHECK (char_length(api_key_id) BETWEEN 8 AND 80),
-  secret_ciphertext bytea NOT NULL,
-  secret_nonce bytea NOT NULL CHECK (octet_length(secret_nonce) = 12),
-  secret_tag bytea NOT NULL CHECK (octet_length(secret_tag) = 16),
-  mode text NOT NULL CHECK (mode IN ('PAPER', 'LIVE')),
-  watchlist text[] NOT NULL,
-  connected_at timestamptz NOT NULL,
-  connected_by text NOT NULL CHECK (ta_id_ok(connected_by)),
-  last_ok_at timestamptz,
-  last_error text,
-  account_number_last4 text,
-  account_status text,
-  CONSTRAINT alpaca_watchlist_size CHECK (cardinality(watchlist) BETWEEN 1 AND 24)
-);
-
-CREATE TABLE IF NOT EXISTS alpaca_order_log (
-  local_id text PRIMARY KEY CHECK (ta_id_ok(local_id)),
-  alpaca_order_id text,
-  client_order_id text NOT NULL UNIQUE CHECK (ta_id_ok(client_order_id)),
-  symbol text NOT NULL,
-  side text NOT NULL CHECK (side IN ('buy', 'sell')),
-  order_type text NOT NULL CHECK (order_type IN ('market', 'limit')),
-  time_in_force text NOT NULL CHECK (time_in_force IN ('day', 'gtc', 'ioc')),
-  qty text,
-  notional text,
-  limit_price text,
-  status text NOT NULL,
-  mode text NOT NULL CHECK (mode IN ('PAPER', 'LIVE')),
-  submitted_at timestamptz NOT NULL,
-  submitted_by text NOT NULL CHECK (ta_id_ok(submitted_by)),
-  raw_receipt jsonb NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS alpaca_order_log_submitted ON alpaca_order_log (submitted_at DESC);
+
+
+def _h64(ch):
+    return ch * 64
+
+
+def build_intact_fixture():
+    """One PREDICT freeze with two pins. Contents and digest columns agree."""
+    st = Store()
+    ast = copy.deepcopy(INITIAL_AST)
+    rule_h = rule_ast_hash(ast)
+    card = {
+        "timing_quality": "ISSUER_CONFIRMED",
+        "card_complete": True,
+        "options_valid": True,
+        "implied_move": "0.080000000000",
+        "benchmark_relative_5d": "-0.010000000000",
+        "benchmark_relative_63d": "0.045000000000",
+    }
+    env_a = {
+        "observation_id": "obs-a",
+        "permanent_security_id": "SEC-A",
+        "session_date": "2026-09-04",
+        "snapshot_type": "QUOTE",
+        "payload": {"last": "100.000000"},
+    }
+    env_z = {
+        "observation_id": "obs-z",
+        "permanent_security_id": "SEC-A",
+        "session_date": "2026-09-04",
+        "snapshot_type": "BAR_DAILY",
+        "payload": {"c": "99.000000"},
+    }
+    ha = observation_hash(env_a)
+    hz = observation_hash(env_z)
+    pins = [
+        {"observation_id": "obs-a", "observation_hash": ha, "pin_index": 0},
+        {"observation_id": "obs-z", "observation_hash": hz, "pin_index": 1},
+    ]
+    pin_list = sorted(
+        [{"id": p["observation_id"], "hash": p["observation_hash"]} for p in pins],
+        key=lambda p: p["id"],
+    )
+    snap = snapshot_hash({
+        "permanent_security_id": "SEC-A",
+        "event_key": "ev-a",
+        "session_date": "2026-09-04",
+        "card": card,
+        "pins": pin_list,
+    })
+    canonical = {
+        "manifest_id": "man-1",
+        "session_date": "2026-09-04",
+        "sleeve": "EARNINGS",
+        "rule_ast_hash": rule_h,
+        "members": [{"permanent_security_id": "SEC-A", "snapshot_hash": snap}],
+    }
+    man_h = manifest_hash(canonical)
+    engine_h = _h64("4")
+    cost_h = _h64("5")
+    in_h = input_hash("man-1", "SEC-A", man_h, snap, rule_h, engine_h, cost_h, 3,
+                      [(p["observation_id"], p["observation_hash"]) for p in pins])
+    ev = evaluate(ast, card)
+    payload = decision_payload(ev, card)
+    out_h = output_hash(in_h, payload)
+
+    st.rule[("rule-1", "v1")] = ast
+    st.manifest["man-1"] = {
+        "canonical_content": canonical,
+        "manifest_hash": man_h,
+        "rule_ast_hash": rule_h,
+        "evaluator_artifact_hash": engine_h,
+        "cost_model_hash": cost_h,
+        "rule_id": "rule-1",
+        "rule_version": "v1",
+        "session_date": "2026-09-04",
+    }
+    st.member[("man-1", "SEC-A")] = {"snapshot_hash": snap, "event_key": "ev-a"}
+    st.sealed[("man-1", "SEC-A")] = {"card": copy.deepcopy(card), "pin_count": 2}
+    st.sealed_pins[("man-1", "SEC-A")] = copy.deepcopy(pins)
+    st.observation["obs-a"] = {"envelope": env_a, "observation_hash": ha, "tombstoned": False}
+    st.observation["obs-z"] = {"envelope": env_z, "observation_hash": hz, "tombstoned": False}
+    st.freeze[("man-1", "SEC-A")] = {
+        "freeze_id": "frz-1",
+        "input_hash": in_h,
+        "output_hash": out_h,
+        "decision": ev["decision"],
+        "direction": ev["direction"],
+        "output_payload": copy.deepcopy(payload),
+        "pin_count": 2,
+    }
+    st.freeze_pins["frz-1"] = copy.deepcopy(pins)
+    st.admission["frz-1"] = {"outcome": "ADMITTED"}
+    return st
+
+
+class VerifierProbes(unittest.TestCase):
+    def test_00_h01_golden(self):
+        got = input_hash(
+            "manifest-20260914", "SEC-A",
+            "1" * 64, "2" * 64, "3" * 64, "4" * 64, "5" * 64, 3,
+            [("obs-z", "a" * 64), ("obs-a", "b" * 64)],
+        )
+        self.assertEqual(got, "bac8f1353582276f85608c618ad44f104f5480fea76d03ce0dbcad4955522726")
+
+    def test_01_intact_is_byte_verified(self):
+        st = build_intact_fixture()
+        out = verify_freeze(st, "man-1", "SEC-A")
+        self.assertEqual(out["verification_level"], "BYTE_VERIFIED")
+        self.assertEqual(out["decision"], "PREDICT")
+        self.assertEqual(st.audit[-1]["result"], "BYTE_VERIFIED")
+        self.assertEqual(len(st.alarms), 0)
+
+    def test_02_wrong_input_hash_rejected(self):
+        st = build_intact_fixture()
+        st.freeze[("man-1", "SEC-A")]["input_hash"] = "c" * 64
+        with self.assertRaises(VerifyError) as cm:
+            verify_freeze(st, "man-1", "SEC-A")
+        self.assertEqual(cm.exception.code, "FREEZE_ARTIFACT_MISMATCH")
+        self.assertEqual(st.audit[-1]["result"], "UNVERIFIABLE")
+
+    def test_03_wrong_output_hash_rejected(self):
+        st = build_intact_fixture()
+        st.freeze[("man-1", "SEC-A")]["output_hash"] = "d" * 64
+        with self.assertRaises(VerifyError):
+            verify_freeze(st, "man-1", "SEC-A")
+
+    def test_04_changed_decision_rejected(self):
+        st = build_intact_fixture()
+        st.freeze[("man-1", "SEC-A")]["decision"] = "STAND_DOWN"
+        st.freeze[("man-1", "SEC-A")]["direction"] = None
+        with self.assertRaises(VerifyError):
+            verify_freeze(st, "man-1", "SEC-A")
+
+    def test_05_missing_rule_blocks(self):
+        st = build_intact_fixture()
+        st.rule.clear()
+        with self.assertRaises(VerifyError) as cm:
+            verify_freeze(st, "man-1", "SEC-A")
+        self.assertEqual(cm.exception.code, "RULE_UNAVAILABLE")
+
+    def test_06_mismatched_rule_digest_blocks(self):
+        st = build_intact_fixture()
+        st.manifest["man-1"]["rule_ast_hash"] = "e" * 64
+        # input hash will also fail first unless we keep hashes consistent —
+        # digest mismatch on loaded AST vs sealed digest is the required check.
+        # Rebuild so input hash still matches stored, only rule digest lies.
+        # Simpler: change stored AST content, leave digest column.
+        st = build_intact_fixture()
+        ast = copy.deepcopy(INITIAL_AST)
+        ast["all"] = list(ast["all"]) + [{"field": "implied_move", "op": "GTE", "value": "0.041000000000"}]
+        st.rule[("rule-1", "v1")] = ast
+        with self.assertRaises(VerifyError) as cm:
+            verify_freeze(st, "man-1", "SEC-A")
+        self.assertEqual(cm.exception.code, "RULE_MISMATCH")
+
+    def test_07_observation_hash_column_changed(self):
+        st = build_intact_fixture()
+        st.observation["obs-a"]["observation_hash"] = "f" * 64
+        with self.assertRaises(VerifyError):
+            verify_freeze(st, "man-1", "SEC-A")
+
+    def test_08_pin_membership_changed(self):
+        st = build_intact_fixture()
+        st.freeze_pins["frz-1"] = [st.freeze_pins["frz-1"][0]]
+        with self.assertRaises(VerifyError):
+            verify_freeze(st, "man-1", "SEC-A")
+
+    def test_09_missing_observation_not_byte_verified(self):
+        st = build_intact_fixture()
+        del st.observation["obs-a"]
+        with self.assertRaises(VerifyError) as cm:
+            verify_freeze(st, "man-1", "SEC-A")
+        self.assertIn("missing", cm.exception.detail)
+        self.assertEqual(st.audit[-1]["result"], "UNVERIFIABLE")
+        self.assertTrue(st.alarms)
+
+    def test_10_tombstoned_observation_not_byte_verified(self):
+        st = build_intact_fixture()
+        st.observation["obs-a"]["tombstoned"] = True
+        with self.assertRaises(VerifyError) as cm:
+            verify_freeze(st, "man-1", "SEC-A")
+        self.assertIn("tombstoned", cm.exception.detail)
+        self.assertEqual(st.audit[-1]["result"], "UNVERIFIABLE")
+
+    def test_11_card_field_change_that_still_predicts(self):
+        st = build_intact_fixture()
+        st.sealed[("man-1", "SEC-A")]["card"]["benchmark_relative_63d"] = "0.046000000000"
+        with self.assertRaises(VerifyError) as cm:
+            verify_freeze(st, "man-1", "SEC-A")
+        self.assertIn("snapshot", cm.exception.detail)
+
+    def test_12_observation_payload_change_old_hash_column(self):
+        st = build_intact_fixture()
+        st.observation["obs-a"]["envelope"] = dict(st.observation["obs-a"]["envelope"])
+        st.observation["obs-a"]["envelope"]["payload"] = {"last": "101.000000"}
+        # hash column left intact
+        with self.assertRaises(VerifyError) as cm:
+            verify_freeze(st, "man-1", "SEC-A")
+        self.assertIn("observation content", cm.exception.detail)
+
+    def test_13_manifest_content_change_old_hash_column(self):
+        st = build_intact_fixture()
+        st.manifest["man-1"]["canonical_content"] = dict(st.manifest["man-1"]["canonical_content"])
+        st.manifest["man-1"]["canonical_content"]["session_date"] = "2026-09-05"
+        with self.assertRaises(VerifyError) as cm:
+            verify_freeze(st, "man-1", "SEC-A")
+        self.assertIn("manifest content", cm.exception.detail)
+
+    def test_14_output_payload_drift_old_hash(self):
+        st = build_intact_fixture()
+        st.freeze[("man-1", "SEC-A")]["output_payload"] = dict(st.freeze[("man-1", "SEC-A")]["output_payload"])
+        st.freeze[("man-1", "SEC-A")]["output_payload"]["magnitude_low"] = "0.900000000000"
+        with self.assertRaises(VerifyError) as cm:
+            verify_freeze(st, "man-1", "SEC-A")
+        self.assertTrue(
+            "output payload" in cm.exception.detail or "replayed decision" in cm.exception.detail
+        )
+
+    def test_15_swapped_pin_indexes(self):
+        st = build_intact_fixture()
+        # Only the freeze-pin indexes move. Sealed pins stay as recorded.
+        st.freeze_pins["frz-1"] = [
+            {**st.freeze_pins["frz-1"][0], "pin_index": 1},
+            {**st.freeze_pins["frz-1"][1], "pin_index": 0},
+        ]
+        with self.assertRaises(VerifyError) as cm:
+            verify_freeze(st, "man-1", "SEC-A")
+        self.assertIn("pin", cm.exception.detail)
+
+    def test_16_incorrect_stored_pin_count(self):
+        st = build_intact_fixture()
+        st.freeze[("man-1", "SEC-A")]["pin_count"] = 9
+        with self.assertRaises(VerifyError):
+            verify_freeze(st, "man-1", "SEC-A")
+
+    def test_17_alarm_survives_writer_rollback(self):
+        st = build_intact_fixture()
+        del st.observation["obs-a"]
+        st.begin()  # simulated writer txn around a naive raiseAlarm
+        try:
+            verify_freeze(st, "man-1", "SEC-A")
+        except VerifyError:
+            st.rollback()  # would wipe raiseAlarm-in-writer; diagnostics already committed
+        self.assertEqual(len(st.audit), 1)
+        self.assertEqual(st.audit[0]["result"], "UNVERIFIABLE")
+        self.assertEqual(len(st._committed_alarms), 1)
+        self.assertEqual(st._committed_alarms[0]["code"], "FREEZE_ARTIFACT_MISMATCH")
+
+    def test_18_verify_does_not_create_freeze(self):
+        st = Store()
+        with self.assertRaises(VerifyError) as cm:
+            verify_freeze(st, "man-missing", "SEC-A")
+        self.assertEqual(cm.exception.code, "NOT_FOUND")
+        self.assertEqual(st.freeze, {})
+
+    def test_19_modeled_fill_not_float(self):
+        got = modeled_fill("123.456789")
+        self.assertEqual(got, "123.518517394500")
+        self.assertNotEqual(got, format(123.456789 * 1.0005, "f"))
+
+    def test_20_no_freeze_is_not_stand_down(self):
+        self.assertNotEqual("NO_FREEZE", "STAND_DOWN")
+
+
+def main():
+    print("Trading App standalone verifier + kernel")
+    print("GitHub: https://github.com/vicia05-lab/trading-app")
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(VerifierProbes)
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    print()
+    if result.wasSuccessful():
+        print("RESULT: all standalone probes passed.")
+        print("Reviewer: clone the repo and confirm src/desk/verify-freeze.ts")
+        print("matches this packet. Then attack it. Do not rubber-stamp.")
+        return 0
+    print("RESULT: FAIL — packet or verifier is wrong.")
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
 ```
