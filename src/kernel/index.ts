@@ -2,6 +2,9 @@
  * Trading App v1.2 pure serialization / numeric / evaluator kernel.
  * Port of the specification reference (section 27). Browser must not import this
  * for research labels, fills, risk counters, or hashes.
+ *
+ * This module is the only hash / fill / admit authority. Do not add a parallel
+ * Python engine (`vicia/engine` or similar). See docs/ARCHITECTURAL_LOCK.md.
  */
 import { createHash, randomBytes } from "node:crypto";
 

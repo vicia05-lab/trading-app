@@ -16,7 +16,7 @@
     "preview:stop": "node scripts/preview.mjs stop",
     "typecheck": "tsc --noEmit",
     "check:auth": "node scripts/check-auth-invariant.mjs",
-    "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/kernel/kernel.test.ts src/desk/learn.test.ts src/ui/capability.test.ts",
+    "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/kernel/kernel.test.ts src/desk/learn.test.ts src/desk/architectural-lock.test.ts src/ui/capability.test.ts",
     "lint": "eslint .",
     "format": "prettier --write .",
     "test:alpaca-secrets": "node --experimental-strip-types --test src/desk/alpaca-data-secrets.test.ts"

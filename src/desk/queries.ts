@@ -434,7 +434,7 @@ export async function resultsPayload(role: DeskRole) {
       partial_manifest_rate: rate(partial, nonempty),
     },
     research: operator
-      ? { restricted: true, message: "Direction hits, bands, marks, and P&L are withheld from OPERATOR until window release." }
+      ? { restricted: true, message: "Direction hits, bands, marks, and P&L are withheld from OPERATOR. This is an information barrier, not a time gate." }
       : {
           restricted: false,
           clean_predict_n: String(C),

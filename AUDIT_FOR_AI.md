@@ -42,5 +42,10 @@ Desk capacity math no longer uses `Number()`. Risk cache compare, reserve, and r
 6. Capacity denial is not FLAT
 7. `NO_FREEZE` ≠ `STAND_DOWN`
 8. Alpaca secret never round-trips to the browser
+9. Mutation clock is `writer_gate.event_seq` — no parallel sequencer
+10. Operator never receives label-derived metrics (not after `window_end_seq`)
+11. Reject any `vicia/engine` (or other) fork that reimplements hashing, fill, or freeze in Python
+
+See `docs/ARCHITECTURAL_LOCK.md`. A proposed Python package (PATCH v1.1.4) is discarded.
 
 Return a GO / NO-GO with failing probes, not vibes.
