@@ -13,6 +13,7 @@ import {
   getOrders,
   getPositions,
   getSnapshots,
+  getTickerDetail,
   publicStatus,
   saveCredentials,
   saveWatchlist,
@@ -242,4 +243,9 @@ export async function fetchAutoStatusImpl(userId: string) {
   await identityOf(userId);
   const { autoStatus } = await import("./auto-trade");
   return autoStatus();
+}
+
+export async function fetchTickerDetailImpl(userId: string, symbol: string) {
+  await identityOf(userId);
+  return getTickerDetail(symbol);
 }

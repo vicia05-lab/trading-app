@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { DeskShell, Empty, Err, Panel, Stat } from "@/components/desk-shell";
+import { TickerTape } from "@/components/ticker-tape";
 import {
   fetchAlpacaDesk,
   fetchAlpacaOrders,
@@ -61,6 +62,8 @@ function TradeBody({
   const [limitPrice, setLimitPrice] = useState("");
   const [extended, setExtended] = useState(false);
   const [confirmLive, setConfirmLive] = useState(false);
+  const [tape, setTape] = useState<string | null>(null);
+  const [lookup, setLookup] = useState("");
 
   async function run(label: string, fn: () => Promise<unknown>) {
     setBusy(true);
@@ -121,6 +124,17 @@ function TradeBody({
       {err ? <Err>{err}</Err> : null}
       {note ? <p className="text-sm text-muted">{note}</p> : null}
 
+      {tape ? (
+        <TickerTape
+          symbol={tape}
+          onClose={() => setTape(null)}
+          onTrade={(s, nextSide) => {
+            setSymbol(s);
+            setSide(nextSide);
+          }}
+        />
+      ) : null}
+
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Panel title="Clock" aside={clock?.is_open === true || clock?.is_open === "true" ? "OPEN" : "closed"}>
           <Stat label="Next open" value={fmtTs(clock?.next_open)} />
@@ -140,7 +154,31 @@ function TradeBody({
         </Panel>
       </div>
 
-      <Panel title="Quotes" aside="IEX / Alpaca data">
+      <Panel title="Quotes" aside="Tap a name for the live tape">
+        <form
+          className="mb-3 flex flex-col gap-2 sm:flex-row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const s = lookup.trim().toUpperCase();
+            if (!s) return;
+            setTape(s);
+            setSymbol(s);
+            setLookup("");
+          }}
+        >
+          <input
+            value={lookup}
+            onChange={(e) => setLookup(e.target.value.toUpperCase())}
+            placeholder="Look up ticker"
+            autoCapitalize="characters"
+            autoCorrect="off"
+            spellCheck={false}
+            className="min-h-11 flex-1 rounded-md border border-border bg-sunken px-3 font-mono text-sm"
+          />
+          <button type="submit" className="min-h-11 rounded-md border border-border px-4 text-sm">
+            Open tape
+          </button>
+        </form>
         {quotes.length === 0 ? (
           <Empty>No snapshots. Save keys, then refresh.</Empty>
         ) : (
@@ -160,7 +198,10 @@ function TradeBody({
                   <tr
                     key={q.symbol}
                     className="cursor-pointer border-t border-border hover:bg-sunken"
-                    onClick={() => setSymbol(q.symbol)}
+                    onClick={() => {
+                      setSymbol(q.symbol);
+                      setTape(q.symbol);
+                    }}
                   >
                     <td className="py-2 font-medium text-fg">{q.symbol}</td>
                     <td className="py-2">{q.last ?? "—"}</td>
@@ -352,7 +393,16 @@ function TradeBody({
               </thead>
               <tbody className="font-mono text-xs">
                 {positions.map((p, i) => (
-                  <tr key={String(p.symbol ?? i)} className="border-t border-border">
+                  <tr
+                    key={String(p.symbol ?? i)}
+                    className="cursor-pointer border-t border-border hover:bg-sunken"
+                    onClick={() => {
+                      if (typeof p.symbol === "string") {
+                        setSymbol(p.symbol);
+                        setTape(p.symbol);
+                      }
+                    }}
+                  >
                     <td className="py-2 text-fg">{String(p.symbol ?? "")}</td>
                     <td className="py-2">{String(p.qty ?? "")}</td>
                     <td className="py-2">{String(p.avg_entry_price ?? "")}</td>
@@ -367,7 +417,10 @@ function TradeBody({
                           type="button"
                           disabled={busy}
                           className="min-h-11 rounded-md border border-border px-3 text-xs"
-                          onClick={() => void run(`Closed ${p.symbol}`, () => postAlpacaClose({ data: { symbol: String(p.symbol) } }))}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void run(`Closed ${p.symbol}`, () => postAlpacaClose({ data: { symbol: String(p.symbol) } }));
+                          }}
                         >
                           Close
                         </button>

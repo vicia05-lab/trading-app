@@ -208,3 +208,11 @@ export const fetchAutoStatus = createServerFn({ method: "GET" })
     const { fetchAutoStatusImpl } = await import("./server-fns-impl.server");
     return fetchAutoStatusImpl(context.userId);
   });
+
+export const fetchTickerDetail = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .validator(z.object({ symbol: z.string().min(1).max(10) }))
+  .handler(async ({ context, data }) => {
+    const { fetchTickerDetailImpl } = await import("./server-fns-impl.server");
+    return fetchTickerDetailImpl(context.userId, data.symbol);
+  });

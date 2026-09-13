@@ -432,6 +432,13 @@ export async function getOrders(
   return asList(await alpacaFetch(`/v2/orders?status=${encodeURIComponent(status)}&limit=50&direction=desc`));
 }
 
+function strField(obj: unknown, key: string): string | null {
+  if (!obj || typeof obj !== "object") return null;
+  const v = (obj as Record<string, unknown>)[key];
+  if (typeof v === "string" && v) return v;
+  return null;
+}
+
 function numField(obj: unknown, key: string): string | null {
   if (!obj || typeof obj !== "object") return null;
   const v = (obj as Record<string, unknown>)[key];
@@ -468,17 +475,15 @@ export async function getDailyBars(
   symbols: string[],
   limit = 70,
 ): Promise<Record<string, Array<{ t: string; o: number; h: number; l: number; c: number }>>> {
-  const list = normalizeWatchlist(symbols);
-  if (!list.length) return {};
-  const body = await alpacaFetch(
-    `/v2/stocks/bars?symbols=${encodeURIComponent(list.join(","))}&timeframe=1Day&limit=${Math.min(Math.max(limit, 5), 100)}&feed=iex&adjustment=split&sort=asc`,
-    { host: "data" },
-  );
+  return getStockBars(symbols, "1Day", limit);
+}
+
+function parseBars(body: AlpacaJson): Record<string, TapeBar[]> {
   const bag =
     body && typeof body === "object" && !Array.isArray(body)
       ? ((body as Record<string, unknown>).bars ?? body)
       : {};
-  const out: Record<string, Array<{ t: string; o: number; h: number; l: number; c: number }>> = {};
+  const out: Record<string, TapeBar[]> = {};
   if (!bag || typeof bag !== "object") return out;
   for (const [sym, rows] of Object.entries(bag as Record<string, unknown>)) {
     if (!Array.isArray(rows)) continue;
@@ -486,16 +491,144 @@ export async function getDailyBars(
       .map((row) => {
         if (!row || typeof row !== "object") return null;
         const r = row as Record<string, unknown>;
-        const c = typeof r.c === "number" ? r.c : Number(r.c);
-        const h = typeof r.h === "number" ? r.h : Number(r.h);
-        const l = typeof r.l === "number" ? r.l : Number(r.l);
-        const o = typeof r.o === "number" ? r.o : Number(r.o);
+        const c = Number(r.c);
+        const h = Number(r.h);
+        const l = Number(r.l);
+        const o = Number(r.o);
+        const v = Number(r.v ?? 0);
         if (![c, h, l, o].every((n) => Number.isFinite(n) && n > 0)) return null;
-        return { t: String(r.t ?? ""), o, h, l, c };
+        return { t: String(r.t ?? ""), o, h, l, c, v: Number.isFinite(v) ? v : 0 };
       })
-      .filter((x): x is { t: string; o: number; h: number; l: number; c: number } => x !== null);
+      .filter((x): x is TapeBar => x !== null);
   }
   return out;
+}
+
+export async function getStockBars(
+  symbols: string[],
+  timeframe: "5Min" | "15Min" | "1Hour" | "1Day",
+  limit = 200,
+  start?: string,
+): Promise<Record<string, TapeBar[]>> {
+  const list = normalizeWatchlist(symbols);
+  if (!list.length) return {};
+  const params = new URLSearchParams({
+    symbols: list.join(","),
+    timeframe,
+    limit: String(Math.min(Math.max(limit, 5), 10000)),
+    feed: "iex",
+    adjustment: "split",
+    sort: "asc",
+  });
+  if (start) params.set("start", start);
+  const body = await alpacaFetch(`/v2/stocks/bars?${params.toString()}`, { host: "data" });
+  return parseBars(body);
+}
+
+type TapeBar = { t: string; o: number; h: number; l: number; c: number; v: number };
+
+function isoDaysAgo(days: number): string {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function fmtPx(n: number | null): string | null {
+  if (n == null || !Number.isFinite(n)) return null;
+  if (n >= 100) return n.toFixed(2);
+  if (n >= 1) return n.toFixed(3);
+  return n.toFixed(4);
+}
+
+function asNum(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+export async function getTickerDetail(rawSymbol: string): Promise<import("./alpaca-types").TickerDetail> {
+  const symbol = normalizeSymbol(rawSymbol);
+  const start5 = isoDaysAgo(6);
+  const [assetRaw, snapBody, intra, daily, newsRaw] = await Promise.all([
+    alpacaFetch(`/v2/assets/${encodeURIComponent(symbol)}`).catch(() => ({})),
+    alpacaFetch(`/v2/stocks/snapshots?symbols=${encodeURIComponent(symbol)}&feed=iex`, { host: "data" }).catch(() => ({})),
+    getStockBars([symbol], "5Min", 1500, start5).catch(() => ({}) as Record<string, TapeBar[]>),
+    getStockBars([symbol], "1Day", 180).catch(() => ({}) as Record<string, TapeBar[]>),
+    alpacaFetch(`/v1beta1/news?symbols=${encodeURIComponent(symbol)}&limit=8&include_content=false`, { host: "data" }).catch(
+      () => ({}),
+    ),
+  ]);
+
+  const asset = asRecord(assetRaw);
+  const snapBag = snapBody && typeof snapBody === "object" && !Array.isArray(snapBody) ? (snapBody as Record<string, unknown>) : {};
+  const snap =
+    (snapBag[symbol] && typeof snapBag[symbol] === "object"
+      ? (snapBag[symbol] as Record<string, unknown>)
+      : snapBag.snapshots && typeof snapBag.snapshots === "object"
+        ? ((snapBag.snapshots as Record<string, unknown>)[symbol] as Record<string, unknown> | undefined)
+        : undefined) ?? {};
+
+  const last = asNum(numField(snap.latestTrade, "p")) ?? asNum(numField(snap.dailyBar, "c"));
+  const prev = asNum(numField(snap.prevDailyBar, "c"));
+  const change = last != null && prev != null ? last - prev : null;
+  const changePct = change != null && prev ? (change / prev) * 100 : null;
+  const dailyBars = daily[symbol] ?? [];
+  let w52h: number | null = null;
+  let w52l: number | null = null;
+  for (const b of dailyBars) {
+    if (w52h == null || b.h > w52h) w52h = b.h;
+    if (w52l == null || b.l < w52l) w52l = b.l;
+  }
+
+  const newsList = (() => {
+    const bag = newsRaw && typeof newsRaw === "object" && !Array.isArray(newsRaw) ? (newsRaw as Record<string, unknown>) : {};
+    const rows = Array.isArray(bag.news) ? bag.news : Array.isArray(newsRaw) ? newsRaw : [];
+    return rows
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        const n = item as Record<string, unknown>;
+        const headline = typeof n.headline === "string" ? n.headline : null;
+        if (!headline) return null;
+        return {
+          id: String(n.id ?? headline),
+          headline,
+          source: typeof n.source === "string" ? n.source : typeof n.author === "string" ? n.author : null,
+          created_at: typeof n.created_at === "string" ? n.created_at : "",
+          url: typeof n.url === "string" ? n.url : null,
+          summary: typeof n.summary === "string" ? n.summary : null,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null)
+      .slice(0, 8);
+  })();
+
+  return {
+    symbol,
+    name: typeof asset.name === "string" ? asset.name : null,
+    exchange: typeof asset.exchange === "string" ? asset.exchange : null,
+    tradable: asset.tradable === true || asset.tradable === "true",
+    last: fmtPx(last),
+    bid: numField(snap.latestQuote, "bp"),
+    ask: numField(snap.latestQuote, "ap"),
+    bid_size: numField(snap.latestQuote, "bs"),
+    ask_size: numField(snap.latestQuote, "as"),
+    change: change == null ? null : fmtPx(change),
+    change_pct: changePct == null ? null : changePct.toFixed(2),
+    open: numField(snap.dailyBar, "o"),
+    high: numField(snap.dailyBar, "h"),
+    low: numField(snap.dailyBar, "l"),
+    prev_close: numField(snap.prevDailyBar, "c"),
+    volume: numField(snap.dailyBar, "v"),
+    vwap: numField(snap.dailyBar, "vw"),
+    week52_high: fmtPx(w52h),
+    week52_low: fmtPx(w52l),
+    trade_at: strField(snap.latestTrade, "t"),
+    quote_at: strField(snap.latestQuote, "t"),
+    bars_intraday: intra[symbol] ?? [],
+    bars_daily: dailyBars,
+    news: newsList,
+  };
 }
 
 export async function submitOrder(args: {
