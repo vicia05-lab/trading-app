@@ -16,16 +16,22 @@ function fmtTime(iso: string, range: Range): string {
 }
 
 function pickBars(tape: TickerDetail, range: Range): TapeBar[] {
+  const daily = tape.bars_daily;
+  const intra = tape.bars_intraday;
   if (range === "1D") {
-    const day = tape.bars_intraday.slice(-120);
-    return day.length ? day : tape.bars_daily.slice(-2);
+    const day = intra.slice(-120);
+    return day.length >= 2 ? day : daily.slice(-5);
   }
   if (range === "5D") {
-    const intra = tape.bars_intraday;
-    return intra.length > 20 ? intra : tape.bars_daily.slice(-5);
+    if (intra.length > 20) return intra;
+    return daily.slice(-5);
   }
-  if (range === "1M") return tape.bars_daily.slice(-22);
-  return tape.bars_daily.slice(-130);
+  if (range === "1M") {
+    if (daily.length >= 2) return daily.slice(-22);
+    return intra.length >= 2 ? intra : daily;
+  }
+  if (daily.length >= 2) return daily.slice(-130);
+  return intra.length >= 2 ? intra : daily;
 }
 
 function volLabel(v: string | null): string {
@@ -135,7 +141,7 @@ export function TickerTape({
         ))}
       </div>
 
-      <div className="mb-4 h-56 w-full sm:h-72">
+      <div className="mb-4 h-64 w-full min-w-0 sm:h-72">
         {loading && !tape ? (
           <Empty>Loading chart…</Empty>
         ) : chartData.length < 2 ? (
