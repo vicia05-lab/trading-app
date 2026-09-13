@@ -46,7 +46,7 @@ function HomeBody({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchHome>
       <AlpacaKeyInsert />
       <Panel title="Auto-execution" aside={d.alpaca?.connected ? (d.alpaca.mode === "LIVE" ? "LIVE OFF" : "PAPER ON") : "needs keys"}>
         <p className="mb-3 text-sm text-muted">
-          Admitted PREDICT names send a $5,000 Alpaca paper ticket. This does not fire in live mode.
+          Admitted watchlist names send a $5,000 Alpaca paper ticket (max 3). Live mode never auto-fires.
         </p>
         {autoNote ? <p className="mb-3 text-sm text-muted">{autoNote}</p> : null}
         <button

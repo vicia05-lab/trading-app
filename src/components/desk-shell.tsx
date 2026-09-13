@@ -124,7 +124,7 @@ export function DeskShell({ children }: { children: ReactNode }) {
               {alpacaOn
                 ? alpacaMode === "LIVE"
                   ? "Live Alpaca — auto-execution is off"
-                  : "Alpaca paper auto-execution · $5,000 tickets on admitted PREDICT"
+                  : "Alpaca paper auto-execution · $5,000 tickets on the watchlist screen"
                 : "Insert keys, then Trade runs the book"}
             </p>
           </div>

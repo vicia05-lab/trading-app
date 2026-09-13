@@ -464,6 +464,40 @@ export async function getSnapshots(
   });
 }
 
+export async function getDailyBars(
+  symbols: string[],
+  limit = 70,
+): Promise<Record<string, Array<{ t: string; o: number; h: number; l: number; c: number }>>> {
+  const list = normalizeWatchlist(symbols);
+  if (!list.length) return {};
+  const body = await alpacaFetch(
+    `/v2/stocks/bars?symbols=${encodeURIComponent(list.join(","))}&timeframe=1Day&limit=${Math.min(Math.max(limit, 5), 100)}&feed=iex&adjustment=split&sort=asc`,
+    { host: "data" },
+  );
+  const bag =
+    body && typeof body === "object" && !Array.isArray(body)
+      ? ((body as Record<string, unknown>).bars ?? body)
+      : {};
+  const out: Record<string, Array<{ t: string; o: number; h: number; l: number; c: number }>> = {};
+  if (!bag || typeof bag !== "object") return out;
+  for (const [sym, rows] of Object.entries(bag as Record<string, unknown>)) {
+    if (!Array.isArray(rows)) continue;
+    out[sym.toUpperCase()] = rows
+      .map((row) => {
+        if (!row || typeof row !== "object") return null;
+        const r = row as Record<string, unknown>;
+        const c = typeof r.c === "number" ? r.c : Number(r.c);
+        const h = typeof r.h === "number" ? r.h : Number(r.h);
+        const l = typeof r.l === "number" ? r.l : Number(r.l);
+        const o = typeof r.o === "number" ? r.o : Number(r.o);
+        if (![c, h, l, o].every((n) => Number.isFinite(n) && n > 0)) return null;
+        return { t: String(r.t ?? ""), o, h, l, c };
+      })
+      .filter((x): x is { t: string; o: number; h: number; l: number; c: number } => x !== null);
+  }
+  return out;
+}
+
 export async function submitOrder(args: {
   symbol: string;
   side: "buy" | "sell";

@@ -107,7 +107,7 @@ function TradeBody({
       <div>
         <h1 className="text-xl font-medium tracking-tight">Trade</h1>
         <p className="mt-1 text-sm text-muted">
-          {live ? "Live Alpaca — auto-execution is off. Manual ticket only." : "Paper auto-execution is on. PREDICT names that pass admission send a $5,000 ticket."}{" "}
+          {live ? "Live Alpaca — auto-execution is off. Manual ticket only." : "Paper auto-execution is on. Watchlist names that pass the pullback/trend screen get a $5,000 ticket (max 3)."}{" "}
           Key {data.status.api_key_masked}
         </p>
       </div>
@@ -497,8 +497,8 @@ function AutoDeskPanel() {
   return (
     <Panel title="Auto-execution" aside={busy ? "RUNNING" : "PAPER"}>
       <p className="mb-3 text-sm leading-relaxed text-muted">
-        When a freeze is PREDICT and admission admits it, the desk sends a $5,000 paper buy on Alpaca. Exits close the
-        venue position. Live keys never auto-fire.
+        When a watchlist name is below SPY over 5 days, above SPY over 63 days, and in a 4–25% 20-day range, the desk
+        sends a $5,000 paper buy (max 3). Fixture names like ALFA are never sent to Alpaca. Live keys never auto-fire.
       </p>
       {err ? <Err>{err}</Err> : null}
       {summary ? <p className="mb-3 text-sm text-muted">{summary}</p> : null}
