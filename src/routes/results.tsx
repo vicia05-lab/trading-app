@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { AppShell, Badge, Empty, Err, PageHeader, Panel, Stat } from "@/components/app-shell";
 import { fetchResults } from "@/desk/server-fns";
 import { decisionLabel, money, positionStateLabel } from "@/ui/labels";
+import { TickerButton } from "@/components/ticker-quote";
 
 export const Route = createFileRoute("/results")({
   head: () => ({ meta: [{ title: "Results | Trading App" }] }),
@@ -139,7 +140,9 @@ function Research({
           <tbody>
             {r.grades.map((g) => (
               <tr key={String(g.id) + String(g.session_date)} className="h-14 border-t border-border">
-                <td>{String(g.ticker)}</td>
+                <td>
+                  <TickerButton symbol={String(g.ticker)} />
+                </td>
                 <td>{decisionLabel(typeof g.decision === "string" ? g.decision : null)}</td>
                 <td>
                   <Badge tone={g.in_evidence_set ? "success" : "warn"}>
@@ -188,7 +191,9 @@ function Book({
           <tbody>
             {b.positions.map((p) => (
               <tr key={p.ticker + p.state} className="h-14 border-t border-border">
-                <td>{p.ticker}</td>
+                <td>
+                  <TickerButton symbol={p.ticker} />
+                </td>
                 <td>{positionStateLabel(p.state)}</td>
                 <td className="text-right tabular-nums">{money(p.original_reserved_notional)}</td>
                 <td className="text-right tabular-nums">{p.paper_pnl == null ? "Excluded" : money(p.paper_pnl, 4)}</td>

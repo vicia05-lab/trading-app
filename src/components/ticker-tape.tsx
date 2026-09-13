@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { fetchTickerDetail } from "@/desk/server-fns";
 import type { TickerDetail, TapeBar } from "@/desk/alpaca-types";
-import { Empty, Err, Panel, Stat } from "@/components/desk-shell";
+import { Empty, Err, Stat } from "@/components/app-shell";
 
 type Range = "1D" | "5D" | "1M" | "6M";
 
@@ -61,7 +61,14 @@ export function TickerTape({
         const d = await fetchTickerDetail({ data: { symbol } });
         if (!cancelled) setTape(d);
       } catch (e) {
-        if (!cancelled) setErr(e instanceof Error ? e.message : "Could not load ticker");
+        if (!cancelled) {
+          const raw = e instanceof Error ? e.message : "Could not load ticker";
+          setErr(
+            raw.includes("Alpaca keys") || raw.includes("ALPACA_NOT_CONNECTED")
+              ? "Save Alpaca keys in Admin to load a live quote for listed tickers."
+              : raw,
+          );
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -78,30 +85,30 @@ export function TickerTape({
   const down = Number(tape?.change_pct ?? 0) < 0;
   const chartData = bars.map((b) => ({ t: b.t, c: b.c, v: b.v }));
   const stroke = down ? "var(--color-danger)" : "var(--color-gain)";
+  void onClose;
 
   return (
-    <Panel title={symbol} aside={tape?.exchange ?? "IEX"}>
-      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm text-muted">{tape?.name ?? (loading ? "Loading…" : "—")}</p>
-          <div className="mt-1 flex flex-wrap items-baseline gap-3">
-            <span className="font-mono text-3xl tabular-nums tracking-tight">{tape?.last ?? "—"}</span>
-            <span className={"font-mono text-sm tabular-nums " + (down ? "text-danger" : "text-gain")}>
-              {tape?.change == null ? "—" : `${Number(tape.change) > 0 ? "+" : ""}${tape.change}`}{" "}
-              {tape?.change_pct == null ? "" : `(${Number(tape.change_pct) > 0 ? "+" : ""}${tape.change_pct}%)`}
-            </span>
-          </div>
-        </div>
-        <button type="button" onClick={onClose} className="min-h-11 rounded-md border border-border px-3 text-sm">
-          Close tape
-        </button>
+    <div>
+      <p className="text-sm text-muted">{tape?.name ?? (loading ? "Loading…" : "—")}</p>
+      <div className="mt-1 flex flex-wrap items-baseline gap-3">
+        <span className="font-mono text-3xl tabular-nums tracking-tight">{tape?.last ?? "—"}</span>
+        <span className={"font-mono text-sm tabular-nums " + (down ? "text-danger" : "text-gain")}>
+          {tape?.change == null ? "—" : `${Number(tape.change) > 0 ? "+" : ""}${tape.change}`}{" "}
+          {tape?.change_pct == null ? "" : `(${Number(tape.change_pct) > 0 ? "+" : ""}${tape.change_pct}%)`}
+        </span>
+        <span className="text-xs text-muted">{tape?.exchange ?? ""}</span>
       </div>
+      {tape?.notice ? <p className="mt-2 text-sm text-warn">{tape.notice}</p> : null}
 
-      {err ? <div className="mb-3"><Err>{err}</Err></div> : null}
+      {err ? (
+        <div className="mt-3">
+          <Err>{err}</Err>
+        </div>
+      ) : null}
 
-      <div className="mb-4 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
-        <Stat label="Bid × size" value={tape?.bid ?? "—"} hint={tape?.bid_size ?? undefined} />
-        <Stat label="Ask × size" value={tape?.ask ?? "—"} hint={tape?.ask_size ?? undefined} />
+      <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
+        <Stat label="Bid" value={tape?.bid ?? "—"} hint={tape?.bid_size ?? undefined} />
+        <Stat label="Ask" value={tape?.ask ?? "—"} hint={tape?.ask_size ?? undefined} />
         <Stat label="Open" value={tape?.open ?? "—"} />
         <Stat label="Prev close" value={tape?.prev_close ?? "—"} />
         <Stat label="High" value={tape?.high ?? "—"} />
@@ -112,14 +119,14 @@ export function TickerTape({
         <Stat label="52-week low" value={tape?.week52_low ?? "—"} />
       </div>
 
-      <div className="mb-2 flex flex-wrap gap-1">
+      <div className="mt-4 mb-2 flex flex-wrap gap-1">
         {(["1D", "5D", "1M", "6M"] as const).map((r) => (
           <button
             key={r}
             type="button"
             onClick={() => setRange(r)}
             className={
-              "min-h-11 rounded-md px-3 text-sm " +
+              "min-h-11 rounded-sm px-3 text-sm " +
               (range === r ? "bg-primary text-primary-fg" : "border border-border text-muted")
             }
           >
@@ -177,31 +184,35 @@ export function TickerTape({
         )}
       </div>
 
-      <div className="mb-4 flex flex-col gap-2 sm:flex-row">
-        <button
-          type="button"
-          className="min-h-12 flex-1 rounded-md bg-gain px-4 text-sm font-medium text-primary-fg"
-          onClick={() => onTrade(symbol, "buy")}
-        >
-          Buy {symbol}
-        </button>
-        <button
-          type="button"
-          className="min-h-12 flex-1 rounded-md bg-danger px-4 text-sm font-medium text-primary-fg"
-          onClick={() => onTrade(symbol, "sell")}
-        >
-          Sell {symbol}
-        </button>
-      </div>
+      {tape?.tradable ? (
+        <div className="mb-4 flex flex-col gap-2 sm:flex-row">
+          <button
+            type="button"
+            className="min-h-12 flex-1 rounded-sm bg-gain px-4 text-sm font-medium text-primary-fg"
+            onClick={() => onTrade(symbol, "buy")}
+          >
+            Buy {symbol}
+          </button>
+          <button
+            type="button"
+            className="min-h-12 flex-1 rounded-sm bg-danger px-4 text-sm font-medium text-primary-fg"
+            onClick={() => onTrade(symbol, "sell")}
+          >
+            Sell {symbol}
+          </button>
+        </div>
+      ) : (
+        <p className="mb-4 text-sm text-muted">Paper buy/sell is available on listed symbols after Alpaca keys are saved.</p>
+      )}
 
       <div>
-        <h3 className="mb-2 text-[11px] uppercase tracking-wider text-muted">News</h3>
+        <h3 className="mb-2 text-sm font-semibold">News</h3>
         {!tape || tape.news.length === 0 ? (
           <Empty>No headlines for this name.</Empty>
         ) : (
           <ul className="grid gap-2">
             {tape.news.map((n) => (
-              <li key={n.id} className="rounded-md border border-border bg-sunken px-3 py-2">
+              <li key={n.id} className="rounded-sm border border-border bg-subtle px-3 py-2">
                 {n.url ? (
                   <a href={n.url} target="_blank" rel="noreferrer" className="text-sm leading-snug hover:underline">
                     {n.headline}
@@ -209,7 +220,7 @@ export function TickerTape({
                 ) : (
                   <p className="text-sm leading-snug">{n.headline}</p>
                 )}
-                <p className="mt-1 font-mono text-[11px] text-faint">
+                <p className="mt-1 font-mono text-[11px] text-muted">
                   {[n.source, n.created_at ? n.created_at.slice(0, 16).replace("T", " ") : null].filter(Boolean).join(" · ")}
                 </p>
               </li>
@@ -217,6 +228,6 @@ export function TickerTape({
           </ul>
         )}
       </div>
-    </Panel>
+    </div>
   );
 }

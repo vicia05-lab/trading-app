@@ -24,6 +24,7 @@
   --warning-bg: #fff7e6;
   --danger-text: #b42318;
   --danger-bg: #fef3f2;
+  --gain: #166534;
   --focus: #1d4ed8;
 }
 
@@ -49,6 +50,7 @@
   --warning-bg: #3b2c13;
   --danger-text: #ffc0b8;
   --danger-bg: #451f22;
+  --gain: #4ade80;
   --focus: #8eb4ff;
 }
 
@@ -74,6 +76,7 @@
   --color-warn-bg: var(--warning-bg);
   --color-danger: var(--danger-text);
   --color-danger-bg: var(--danger-bg);
+  --color-gain: var(--gain);
   --color-bg: var(--canvas);
   --color-sunken: var(--surface-subtle);
   --color-faint: var(--text-muted);

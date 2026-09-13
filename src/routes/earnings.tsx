@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AppShell, Badge, Drawer, Empty, Err, PageHeader, Panel, SessionTabs } from "@/components/app-shell";
 import { fetchEarnings } from "@/desk/server-fns";
 import { decisionLabel, infoStatus, pct, timingLabel } from "@/ui/labels";
+import { TickerButton, useTickerQuote } from "@/components/ticker-quote";
 
 export const Route = createFileRoute("/earnings")({
   validateSearch: (raw: Record<string, unknown>) => ({
@@ -41,6 +42,7 @@ function Body({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchEarnings>
   const [q, setQ] = useState("");
   const [tab, setTab] = useState<"list" | "excluded" | "awaiting">("list");
   const [detail, setDetail] = useState<string | null>(null);
+  const { openTicker } = useTickerQuote();
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -111,10 +113,13 @@ function Body({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchEarnings>
                 </thead>
                 <tbody>
                   {filtered.map((m) => (
-                    <tr key={m.permanent_security_id} className="h-14 border-t border-border">
+                    <tr
+                      key={m.permanent_security_id}
+                      className="h-14 cursor-pointer border-t border-border hover:bg-subtle"
+                      onClick={() => openTicker(m.ticker)}
+                    >
                       <td>
-                        <div className="font-medium">{m.ticker}</div>
-                        <div className="text-sm text-muted">{m.name}</div>
+                        <TickerButton symbol={m.ticker} name={m.name} />
                       </td>
                       <td>{timingLabel(m.timing_quality)}</td>
                       <td>{infoStatus(m.card_complete, m.options_valid)}</td>
@@ -127,7 +132,10 @@ function Body({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchEarnings>
                         <button
                           type="button"
                           className="min-h-11 text-sm font-medium text-info"
-                          onClick={() => setDetail(m.permanent_security_id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDetail(m.permanent_security_id);
+                          }}
                         >
                           View details
                         </button>
@@ -149,7 +157,9 @@ function Body({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchEarnings>
             <ul className="grid gap-2">
               {d.exclusions.map((e) => (
                 <li key={e.permanent_security_id} className="rounded-sm bg-subtle px-3 py-2 text-sm">
-                  <span className="font-medium">{e.ticker}</span>
+                  <span className="font-medium">
+                    <TickerButton symbol={e.ticker} />
+                  </span>
                   <span className="text-muted"> · {e.reason_codes.join(", ") || e.status}</span>
                 </li>
               ))}

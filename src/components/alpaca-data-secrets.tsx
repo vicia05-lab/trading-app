@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useId, useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
 import type { ReactNode } from "react";
 import {
   fetchAlpacaDataSecret, saveAlpacaDataSecret, testAlpacaDataSecret, removeAlpacaDataSecret,
@@ -86,6 +85,10 @@ export function AlpacaDataSecrets({ transport = api }: { transport?: AlpacaSecre
   const saved = Boolean(status?.configured);
   const tested = status?.test_result === "VERIFIED";
 
+  useEffect(() => {
+    if (loaded?.can_manage && storageReady && !saved) setOpen(true);
+  }, [loaded, storageReady, saved]);
+
   return (
     <Panel title="Alpaca market-data connection">
       <p className="mb-4 text-sm leading-relaxed text-muted">
@@ -107,26 +110,14 @@ export function AlpacaDataSecrets({ transport = api }: { transport?: AlpacaSecre
       </dl>
 
       <div className="flex flex-wrap gap-2">
-        <Dialog.Root open={open} onOpenChange={(value) => { if (!busy) setOpen(value); }}>
-          <Dialog.Trigger asChild>
-            <button
-              type="button"
-              disabled={!loaded?.can_manage || loading || busy || !storageReady}
-              className="min-h-11 rounded-sm bg-primary px-4 text-sm font-medium text-primary-fg disabled:opacity-40"
-            >
-              {saved ? "Replace Alpaca keys" : "Add keys"}
-            </button>
-          </Dialog.Trigger>
-          {open && loaded ? (
-            <SecretForm
-              replace={saved}
-              expectedVersion={loaded.status.version}
-              transport={transport}
-              onBusy={setBusy}
-              onSaved={(r) => { setLoaded(r); setOpen(false); setNote(messages.SAVED); setError(null); }}
-            />
-          ) : null}
-        </Dialog.Root>
+        <button
+          type="button"
+          disabled={!loaded?.can_manage || loading || busy || !storageReady}
+          className="min-h-11 rounded-sm bg-primary px-4 text-sm font-medium text-primary-fg disabled:opacity-40"
+          onClick={() => setOpen((v) => !v)}
+        >
+          {open ? "Hide key form" : saved ? "Replace Alpaca keys" : "Add keys"}
+        </button>
         {saved && loaded?.can_manage ? (
           <>
             <button type="button" disabled={!canEdit} onClick={() => void run("test")} className="min-h-11 rounded-sm border border-control px-4 text-sm disabled:opacity-40">
@@ -141,6 +132,15 @@ export function AlpacaDataSecrets({ transport = api }: { transport?: AlpacaSecre
           Refresh status
         </button>
       </div>
+      {open && loaded?.can_manage && storageReady ? (
+        <SecretForm
+          replace={saved}
+          expectedVersion={loaded.status.version}
+          transport={transport}
+          onBusy={setBusy}
+          onSaved={(r) => { setLoaded(r); setOpen(false); setNote(messages.SAVED); setError(null); }}
+        />
+      ) : null}
       {!storageReady && loaded?.can_manage ? (
         <p className="mt-3 text-sm text-warn">Secure storage is not ready. Your keys have not been saved.</p>
       ) : null}
@@ -234,83 +234,67 @@ function SecretForm({
   const fieldType = show ? "text" : "password";
 
   return (
-    <Dialog.Portal>
-      <Dialog.Overlay className="fixed inset-0 z-40 bg-nav/50" />
-      <Dialog.Content
-        onEscapeKeyDown={(e) => {
-          if (saving) e.preventDefault();
-        }}
-        onInteractOutside={(e) => {
-          if (saving) e.preventDefault();
-        }}
-        className="fixed left-1/2 top-6 z-50 max-h-[calc(100dvh-32px)] w-[calc(100%-32px)] max-w-[480px] -translate-x-1/2 overflow-y-auto rounded-lg border border-border bg-surface p-6 shadow-lg md:top-1/2 md:-translate-y-1/2"
-      >
-        <Dialog.Title className="text-xl font-semibold">{replace ? "Replace Alpaca keys" : "Save Alpaca keys"}</Dialog.Title>
-        <Dialog.Description className="mt-2 text-base leading-6 text-muted">
-          Enter the API key ID and secret for market-data access. Both are encrypted on the server. Saving them does not
-          place orders or enable live trading.
-        </Dialog.Description>
-        <form className="mt-5 grid gap-4" onSubmit={(e) => void save(e)} autoComplete="off">
-          <label htmlFor={keyId} className="grid gap-1 text-sm font-medium">
-            API key ID
-            <input
-              id={keyId}
-              name="alpaca_data_key_id"
-              type={fieldType}
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-              disabled={saving}
-              required
-              minLength={8}
-              maxLength={80}
-              autoComplete="off"
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              className="min-h-12 w-full rounded-sm border border-control bg-surface px-3 text-base"
-            />
-          </label>
-          <label htmlFor={secretId} className="grid gap-1 text-sm font-medium">
-            Secret key
-            <input
-              id={secretId}
-              name="alpaca_data_secret"
-              type={fieldType}
-              value={secret}
-              onChange={(e) => setSecret(e.target.value)}
-              disabled={saving}
-              required
-              minLength={8}
-              maxLength={256}
-              autoComplete="off"
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              className="min-h-12 w-full rounded-sm border border-control bg-surface px-3 text-base"
-            />
-          </label>
-          <p className="text-sm text-muted">Paste the full key without spaces or line breaks.</p>
-          <label className="flex min-h-11 items-center gap-2 text-sm">
-            <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} disabled={saving} />
-            Show newly entered keys
-          </label>
-          {error ? (
-            <div role="alert" className="rounded-md bg-danger-bg px-3 py-2 text-sm text-danger">
-              {error}
-            </div>
-          ) : null}
-          <div className="flex flex-wrap gap-2">
-            <button type="submit" disabled={saving} className="min-h-11 rounded-sm bg-primary px-4 text-sm font-medium text-primary-fg disabled:opacity-40">
-              {saving ? "Saving…" : "Save secret"}
-            </button>
-            <Dialog.Close asChild>
-              <button type="button" disabled={saving} className="min-h-11 rounded-sm border border-control px-4 text-sm">
-                Cancel
-              </button>
-            </Dialog.Close>
+    <div className="mt-4 rounded-md border border-border bg-subtle p-4">
+      <h3 className="text-base font-semibold">{replace ? "Replace Alpaca keys" : "Save Alpaca keys"}</h3>
+      <p className="mt-2 text-sm leading-relaxed text-muted">
+        Enter the API key ID and secret for market-data access. Both are encrypted on the server. Saving them does not
+        place orders or enable live trading.
+      </p>
+      <form className="mt-5 grid gap-4" onSubmit={(e) => void save(e)} autoComplete="off">
+        <label htmlFor={keyId} className="grid gap-1 text-sm font-medium">
+          API key ID
+          <input
+            id={keyId}
+            name="alpaca_data_key_id"
+            type={fieldType}
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            disabled={saving}
+            required
+            minLength={8}
+            maxLength={80}
+            autoComplete="off"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            className="min-h-12 w-full rounded-sm border border-control bg-surface px-3 text-base"
+          />
+        </label>
+        <label htmlFor={secretId} className="grid gap-1 text-sm font-medium">
+          Secret key
+          <input
+            id={secretId}
+            name="alpaca_data_secret"
+            type={fieldType}
+            value={secret}
+            onChange={(e) => setSecret(e.target.value)}
+            disabled={saving}
+            required
+            minLength={8}
+            maxLength={256}
+            autoComplete="off"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            className="min-h-12 w-full rounded-sm border border-control bg-surface px-3 text-base"
+          />
+        </label>
+        <p className="text-sm text-muted">Paste the full key without spaces or line breaks.</p>
+        <label className="flex min-h-11 items-center gap-2 text-sm">
+          <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} disabled={saving} />
+          Show newly entered keys
+        </label>
+        {error ? (
+          <div role="alert" className="rounded-md bg-danger-bg px-3 py-2 text-sm text-danger">
+            {error}
           </div>
-        </form>
-      </Dialog.Content>
-    </Dialog.Portal>
+        ) : null}
+        <div className="flex flex-wrap gap-2">
+          <button type="submit" disabled={saving} className="min-h-11 rounded-sm bg-primary px-4 text-sm font-medium text-primary-fg disabled:opacity-40">
+            {saving ? "Saving…" : "Save secret"}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }

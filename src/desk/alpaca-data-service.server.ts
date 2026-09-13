@@ -1,6 +1,7 @@
 import { getSql } from "@/lib/db";
 import { createSecretService, SecretError } from "./alpaca-data-secrets";
 import type { SecretCode, SecretStatus, SecretSql } from "./alpaca-data-secrets";
+import { decryptPair } from "./alpaca-data-secrets";
 import { loadOrCreateMasterKey } from "./alpaca-master-key.server";
 
 export type SecretReply =
@@ -53,5 +54,23 @@ export async function execute(
     return { ok: true, can_manage: true, status: await action(service) };
   } catch (error) {
     return { ok: false, code: error instanceof SecretError ? error.code : "STORAGE_UNAVAILABLE" };
+  }
+}
+
+/** Decrypt the owner’s saved market-data pair for server-side data calls. Never send to the browser. */
+export async function loadDataPair(userId: string): Promise<{ apiKeyId: string; apiSecret: string } | null> {
+  if (!userId) return null;
+  const db = await getSql();
+  await ensureSchema(db);
+  const rows = await db.query<{ version: string; envelope: { format: string; iv: string; tag: string; ciphertext: string } }>(
+    `SELECT version::text, envelope FROM alpaca_data_secret WHERE owner_user_id = $1`,
+    [userId],
+  );
+  if (!rows.length) return null;
+  const key = loadOrCreateMasterKey();
+  try {
+    return decryptPair(key, userId, rows[0].version, rows[0].envelope as Parameters<typeof decryptPair>[3]);
+  } finally {
+    key.fill(0);
   }
 }

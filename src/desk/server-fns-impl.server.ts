@@ -247,5 +247,5 @@ export async function fetchAutoStatusImpl(userId: string) {
 
 export async function fetchTickerDetailImpl(userId: string, symbol: string) {
   await identityOf(userId);
-  return getTickerDetail(symbol);
+  return getTickerDetail(symbol, userId);
 }

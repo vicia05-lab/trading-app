@@ -48,4 +48,6 @@ export type TickerDetail = {
   bars_intraday: TapeBar[];
   bars_daily: TapeBar[];
   news: TapeNews[];
+  feed: "live" | "sample";
+  notice: string | null;
 };

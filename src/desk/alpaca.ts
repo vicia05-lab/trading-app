@@ -250,10 +250,42 @@ async function loadStored(): Promise<StoredCred> {
   return { api_key_id: r.api_key_id, secret, mode: r.mode, watchlist: watch.length ? watch : DEFAULT_WATCH };
 }
 
+type Creds = StoredCred;
+let credOverride: Creds | null = null;
+
+async function resolveCreds(userId?: string): Promise<Creds> {
+  try {
+    return await loadStored();
+  } catch (first) {
+    if (userId) {
+      try {
+        const { loadDataPair } = await import("./alpaca-data-service.server");
+        const pair = await loadDataPair(userId);
+        if (pair) {
+          return { api_key_id: pair.apiKeyId, secret: pair.apiSecret, mode: "PAPER", watchlist: DEFAULT_WATCH };
+        }
+      } catch {
+        /* fall through to original error */
+      }
+    }
+    throw first;
+  }
+}
+
+async function withCreds<T>(creds: Creds, fn: () => Promise<T>): Promise<T> {
+  const prev = credOverride;
+  credOverride = creds;
+  try {
+    return await fn();
+  } finally {
+    credOverride = prev;
+  }
+}
+
 type AlpacaJson = Record<string, unknown> | unknown[];
 
 async function alpacaFetch(path: string, init: RequestInit & { host?: "trade" | "data" } = {}): Promise<AlpacaJson> {
-  const creds = await loadStored();
+  const creds = credOverride ?? (await loadStored());
   const host = init.host === "data" ? "https://data.alpaca.markets" : tradingHost(creds.mode);
   const headers = new Headers(init.headers);
   headers.set("APCA-API-KEY-ID", creds.api_key_id);
@@ -547,8 +579,103 @@ function asNum(v: unknown): number | null {
   return null;
 }
 
-export async function getTickerDetail(rawSymbol: string): Promise<import("./alpaca-types").TickerDetail> {
+const FIXTURE_TICKERS = new Set(["ALFA", "BRAV", "CHRL", "DELT", "ECHO", "FOXT", "GOLF", "HOTL"]);
+
+function synthBars(last: number, count: number, stepMs: number, end = Date.now()): TapeBar[] {
+  const out: TapeBar[] = [];
+  for (let i = 0; i < count; i++) {
+    const t = end - (count - 1 - i) * stepMs;
+    const wave = Math.sin(i / 8) * last * 0.006 + Math.cos(i / 3.2) * last * 0.003;
+    const c = last * (0.97 + (0.03 * i) / Math.max(count - 1, 1)) + wave;
+    const o = c - last * 0.0015;
+    const h = Math.max(o, c) + last * 0.002;
+    const l = Math.min(o, c) - last * 0.002;
+    out.push({ t: new Date(t).toISOString(), o, h, l, c, v: 120_000 + i * 850 });
+  }
+  if (out.length) out[out.length - 1].c = last;
+  return out;
+}
+
+async function fixtureDetail(symbol: string): Promise<import("./alpaca-types").TickerDetail | null> {
+  const sql = await getSql();
+  const map = await sql.query<{ ticker: string; name: string | null; permanent_security_id: string }>(
+    `SELECT st.ticker, s.display_name AS name, st.permanent_security_id
+     FROM security_ticker st JOIN security s ON s.permanent_security_id = st.permanent_security_id
+     WHERE st.ticker = $1
+     LIMIT 1`,
+    [symbol],
+  );
+  if (!map.length) return null;
+  const quotes = await sql.query<{ envelope: { payload?: Record<string, unknown> } }>(
+    `SELECT envelope FROM observation
+     WHERE permanent_security_id = $1 AND snapshot_type = 'QUOTE' AND tombstoned = FALSE
+     ORDER BY received_at DESC LIMIT 1`,
+    [map[0].permanent_security_id],
+  );
+  const p = quotes[0]?.envelope?.payload ?? {};
+  const last = asNum(p.last) ?? asNum(p.mid) ?? 100;
+  const bid = asNum(p.bid);
+  const ask = asNum(p.ask);
+  const daily = synthBars(last, 80, 24 * 60 * 60 * 1000);
+  const intra = synthBars(last, 78, 5 * 60 * 1000);
+  const prev = daily.length > 1 ? daily[daily.length - 2].c : last;
+  const change = last - prev;
+  return {
+    symbol,
+    name: map[0].name,
+    exchange: "SAMPLE",
+    tradable: false,
+    last: fmtPx(last),
+    bid: bid != null ? fmtPx(bid) : null,
+    ask: ask != null ? fmtPx(ask) : null,
+    bid_size: null,
+    ask_size: null,
+    change: fmtPx(change),
+    change_pct: prev ? ((change / prev) * 100).toFixed(2) : null,
+    open: fmtPx(intra[0]?.o ?? last),
+    high: fmtPx(Math.max(...intra.map((b) => b.h))),
+    low: fmtPx(Math.min(...intra.map((b) => b.l))),
+    prev_close: fmtPx(prev),
+    volume: String(intra.reduce((s, b) => s + b.v, 0)),
+    vwap: fmtPx(last),
+    week52_high: fmtPx(Math.max(...daily.map((b) => b.h))),
+    week52_low: fmtPx(Math.min(...daily.map((b) => b.l))),
+    trade_at: intra.at(-1)?.t ?? null,
+    quote_at: intra.at(-1)?.t ?? null,
+    bars_intraday: intra,
+    bars_daily: daily,
+    news: [
+      {
+        id: `sample-${symbol}`,
+        headline: `${map[0].name ?? symbol} is a sample research name. Live IEX quotes need a listed ticker such as AAPL.`,
+        source: "Trading App",
+        created_at: new Date().toISOString(),
+        url: null,
+        summary: null,
+      },
+    ],
+    feed: "sample",
+    notice: "Sample session prices. Open a listed ticker (AAPL, NVDA, SPY) for a live IEX feed.",
+  };
+}
+
+export async function getTickerDetail(rawSymbol: string, userId?: string): Promise<import("./alpaca-types").TickerDetail> {
   const symbol = normalizeSymbol(rawSymbol);
+  if (FIXTURE_TICKERS.has(symbol)) {
+    const sample = await fixtureDetail(symbol);
+    if (sample) return sample;
+  }
+  try {
+    const creds = await resolveCreds(userId);
+    return await withCreds(creds, () => liveTickerDetail(symbol));
+  } catch (err) {
+    const sample = await fixtureDetail(symbol);
+    if (sample) return sample;
+    throw err;
+  }
+}
+
+async function liveTickerDetail(symbol: string): Promise<import("./alpaca-types").TickerDetail> {
   const start5 = isoDaysAgo(6);
   const [assetRaw, snapBody, intra, daily, newsRaw] = await Promise.all([
     alpacaFetch(`/v2/assets/${encodeURIComponent(symbol)}`).catch(() => ({})),
@@ -628,6 +755,8 @@ export async function getTickerDetail(rawSymbol: string): Promise<import("./alpa
     bars_intraday: intra[symbol] ?? [],
     bars_daily: dailyBars,
     news: newsList,
+    feed: "live",
+    notice: null,
   };
 }
 

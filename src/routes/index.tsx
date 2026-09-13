@@ -4,6 +4,7 @@ import { AppShell, Badge, Empty, Err, PageHeader, Panel, Stat } from "@/componen
 import { fetchHome } from "@/desk/server-fns";
 import { fetchAlpacaDataSecret } from "@/desk/alpaca-data-fns";
 import { formatSession, money, positionStateLabel } from "@/ui/labels";
+import { TickerButton, TickerLookup } from "@/components/ticker-quote";
 
 export const Route = createFileRoute("/")({
   head: () => ({ meta: [{ title: "Home | Trading App" }] }),
@@ -104,6 +105,11 @@ function HomeBody({
       </p>
 
       <SetupChecklist secret={secret} />
+
+      <Panel title="Look up a listed ticker">
+        <p className="mb-3 text-sm text-muted">Open a live quote, chart, and news. Sample names (ALFA, BRAV) show session prices.</p>
+        <TickerLookup />
+      </Panel>
 
       <section className="rounded-md border border-border bg-surface p-4 md:p-6">
         <h2 className="text-[20px] font-semibold leading-7">{headline}</h2>
@@ -212,8 +218,7 @@ function HomeBody({
                 {d.open_positions.map((p) => (
                   <tr key={p.position_id} className="h-14 border-t border-border">
                     <td>
-                      <div className="font-medium">{p.ticker}</div>
-                      <div className="text-sm text-muted">{p.name}</div>
+                      <TickerButton symbol={p.ticker} name={p.name} />
                     </td>
                     <td>{formatSession(p.session_date)}</td>
                     <td className="text-right tabular-nums">{money(p.notional)}</td>

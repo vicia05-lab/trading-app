@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AppShell, Badge, Drawer, Empty, Err, PageHeader, SessionTabs } from "@/components/app-shell";
 import { fetchPredictions, postVerifyFreeze } from "@/desk/server-fns";
 import { decisionLabel, mainReason, paperLabel, verificationLabel } from "@/ui/labels";
+import { TickerButton, useTickerQuote } from "@/components/ticker-quote";
 
 export const Route = createFileRoute("/predictions")({
   validateSearch: (raw: Record<string, unknown>) => ({
@@ -68,6 +69,7 @@ function Body({
   const s = d.rows.filter((r) => r.status === "STAND_DOWN").length;
   const u = d.rows.filter((r) => r.status === "NO_FREEZE").length;
   const selected = d.rows.find((r) => r.permanent_security_id === detail) ?? null;
+  const { openTicker } = useTickerQuote();
 
   return (
     <div className="flex flex-col gap-6">
@@ -117,15 +119,28 @@ function Body({
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.permanent_security_id} className="h-14 border-t border-border">
-                <td className="font-medium">{r.ticker}</td>
+              <tr
+                key={r.permanent_security_id}
+                className="h-14 cursor-pointer border-t border-border hover:bg-subtle"
+                onClick={() => openTicker(r.ticker)}
+              >
+                <td className="font-medium">
+                  <TickerButton symbol={r.ticker} />
+                </td>
                 <td>
                   <Badge tone={r.status === "PREDICT" ? "info" : "neutral"}>{decisionLabel(r.status, r.reasons)}</Badge>
                 </td>
                 <td className="max-w-xs text-muted">{mainReason(r.reasons)}</td>
                 <td>{paperLabel(r.execution, r.status)}</td>
                 <td>
-                  <button type="button" className="min-h-11 text-sm font-medium text-info" onClick={() => setDetail(r.permanent_security_id)}>
+                  <button
+                    type="button"
+                    className="min-h-11 text-sm font-medium text-info"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDetail(r.permanent_security_id);
+                    }}
+                  >
                     View decision
                   </button>
                 </td>
