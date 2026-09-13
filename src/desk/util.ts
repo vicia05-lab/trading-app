@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { ident, sha256, canon } from "@/kernel/index";
+import { ident, sha256, canon } from "../kernel/index.ts";
 
 export class DeskError extends Error {
   code: string;

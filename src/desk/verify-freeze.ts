@@ -1,5 +1,6 @@
 import { getSql } from "@/lib/db";
 import {
+  KernelError,
   evaluate,
   inputHash,
   magnitudeBand,
@@ -11,6 +12,7 @@ import {
 } from "@/kernel/index";
 import { asHex, DeskError, jsonCanon, newId } from "./util";
 import type { TypedCard } from "./features";
+import { assertCanonicalPinOrder, manifestObjectFromStored } from "./verify-decode";
 
 const MARGIN = 3;
 
@@ -74,9 +76,12 @@ async function recordOutcome(args: {
   }
 }
 
-async function fail(args: { freezeId: string; manifestId: string; securityId: string; detail: string }): Promise<never> {
+async function fail(
+  args: { freezeId: string; manifestId: string; securityId: string; detail: string },
+  code = "FREEZE_ARTIFACT_MISMATCH",
+): Promise<never> {
   await recordOutcome({ ...args, result: "UNVERIFIABLE" });
-  throw new DeskError("FREEZE_ARTIFACT_MISMATCH", args.detail, 503);
+  throw new DeskError(code, args.detail, 503);
 }
 
 function evalCard(card: TypedCard) {
@@ -137,7 +142,7 @@ export async function verifyFreezeArtifact(manifestId: string, securityId: strin
   );
   if (!fr.length) throw new DeskError("NOT_FOUND", "no freeze to verify", 404);
   const freezeId = fr[0].freeze_id;
-  const reject = (detail: string) => fail({ freezeId, manifestId, securityId, detail });
+  const reject = (detail: string, code?: string) => fail({ freezeId, manifestId, securityId, detail }, code);
 
   const man = await sql.query<{
     manifest_hash: Buffer;
@@ -156,7 +161,14 @@ export async function verifyFreezeArtifact(manifestId: string, securityId: strin
   );
   if (!man.length) throw new DeskError("NOT_FOUND", "manifest missing", 404);
 
-  const rebuiltManifest = manifestHash(man[0].canonical_content);
+  let manifestObject: Record<string, unknown>;
+  try {
+    manifestObject = manifestObjectFromStored(man[0].canonical_content);
+  } catch (e) {
+    const detail = e instanceof DeskError ? e.message : "canonical manifest text is not CJ1";
+    await reject(detail);
+  }
+  const rebuiltManifest = manifestHash(manifestObject!);
   if (rebuiltManifest !== asHex(man[0].manifest_hash)) {
     await reject("manifest content does not match the stored manifest hash");
   }
@@ -192,6 +204,12 @@ export async function verifyFreezeArtifact(manifestId: string, securityId: strin
       await reject("pin membership or pin index disagrees with the sealed set");
     }
   }
+  try {
+    assertCanonicalPinOrder(sealedPins);
+    assertCanonicalPinOrder(freezePins);
+  } catch (e) {
+    await reject(e instanceof DeskError ? e.message : "pin_index is not UTF-8 byte-lex order of observation ids");
+  }
 
   for (const pin of sealedPins) {
     const obs = await sql.query<{ observation_hash: Buffer; envelope: unknown; tombstoned: boolean }>(
@@ -204,15 +222,21 @@ export async function verifyFreezeArtifact(manifestId: string, securityId: strin
     if (obs[0].tombstoned) {
       await reject("pinned observation is tombstoned without a surviving attestation");
     }
-    const recomputed = observationHash(obs[0].envelope);
-    if (recomputed !== asHex(obs[0].observation_hash) || recomputed !== asHex(pin.observation_hash)) {
+    let recomputed: string;
+    try {
+      recomputed = observationHash(obs[0].envelope);
+    } catch (e) {
+      const detail = e instanceof KernelError ? "observation content is not canonical" : "observation content does not match the sealed pin hash";
+      await reject(detail);
+    }
+    if (recomputed! !== asHex(obs[0].observation_hash) || recomputed! !== asHex(pin.observation_hash)) {
       await reject("observation content does not match the sealed pin hash");
     }
   }
 
   const pinList = sealedPins
     .map((p) => ({ id: p.observation_id, hash: asHex(p.observation_hash) }))
-    .sort((a, b) => (a.id < b.id ? -1 : 1));
+    .sort((a, b) => Buffer.from(a.id, "utf8").compare(Buffer.from(b.id, "utf8")));
   const rebuiltSnap = snapshotHash({
     permanent_security_id: securityId,
     event_key: member[0].event_key,
@@ -245,9 +269,11 @@ export async function verifyFreezeArtifact(manifestId: string, securityId: strin
     [man[0].rule_id, man[0].rule_version],
   );
   const ast = ruleRows[0]?.ast_content;
-  if (ast == null) throw new DeskError("RULE_UNAVAILABLE", "sealed rule is missing", 503);
+  if (ast == null) {
+    await reject("sealed rule is missing", "RULE_UNAVAILABLE");
+  }
   if (ruleAstHash(ast) !== asHex(man[0].rule_ast_hash)) {
-    throw new DeskError("RULE_MISMATCH", "loaded rule does not match the sealed digest", 503);
+    await reject("loaded rule does not match the sealed digest", "RULE_MISMATCH");
   }
 
   const card = sealed[0].card;

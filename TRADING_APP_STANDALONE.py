@@ -575,6 +575,29 @@ def _hex(x):
     return x if isinstance(x, str) else x
 
 
+def manifest_object_from_stored(raw):
+    """Writer hashes the object and stores jsonCanon(object) as TEXT."""
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8")
+    if isinstance(raw, str):
+        try:
+            obj = json.loads(raw)
+        except Exception as exc:
+            raise VerifyError("FREEZE_ARTIFACT_MISMATCH", "canonical manifest text is not CJ1") from exc
+        if type(obj) is not dict:
+            raise VerifyError("FREEZE_ARTIFACT_MISMATCH", "canonical manifest is not an object")
+        rec = canon(obj).decode("utf-8")
+        if rec != raw:
+            raise VerifyError(
+                "FREEZE_ARTIFACT_MISMATCH",
+                "canonical manifest re-encoding does not match stored bytes",
+            )
+        return obj
+    if type(raw) is dict:
+        return raw
+    raise VerifyError("FREEZE_ARTIFACT_MISMATCH", "canonical manifest is missing or not an object")
+
+
 class Store:
     """Minimal immutable-artifact store plus append-only diagnostics."""
 
@@ -631,7 +654,7 @@ def verify_freeze(store: Store, manifest_id: str, security_id: str) -> dict:
         raise VerifyError("NOT_FOUND", "no freeze to verify")
     freeze_id = fr["freeze_id"]
 
-    def fail(detail):
+    def fail(detail, code="FREEZE_ARTIFACT_MISMATCH"):
         store.add_audit({
             "freeze_id": freeze_id,
             "manifest_id": manifest_id,
@@ -644,10 +667,14 @@ def verify_freeze(store: Store, manifest_id: str, security_id: str) -> dict:
             "freeze_id": freeze_id,
             "detail": detail,
         })
-        raise VerifyError("FREEZE_ARTIFACT_MISMATCH", detail)
+        raise VerifyError(code, detail)
 
     man = store.manifest[manifest_id]
-    rebuilt_manifest = manifest_hash(man["canonical_content"])
+    try:
+        manifest_object = manifest_object_from_stored(man["canonical_content"])
+    except VerifyError as e:
+        fail(e.detail, e.code)
+    rebuilt_manifest = manifest_hash(manifest_object)
     if rebuilt_manifest != man["manifest_hash"]:
         fail("manifest content does not match the stored manifest hash")
 
@@ -675,13 +702,25 @@ def verify_freeze(store: Store, manifest_id: str, security_id: str) -> dict:
         ):
             fail("pin membership or pin index disagrees with the sealed set")
 
+    ranked = sorted(sealed_pins, key=lambda p: p["observation_id"].encode("utf-8"))
+    for i, p in enumerate(ranked):
+        if p["pin_index"] != i:
+            fail("pin_index is not UTF-8 byte-lex order of observation ids")
+    ranked_f = sorted(freeze_pins, key=lambda p: p["observation_id"].encode("utf-8"))
+    for i, p in enumerate(ranked_f):
+        if p["pin_index"] != i:
+            fail("pin_index is not UTF-8 byte-lex order of observation ids")
+
     for pin in sealed_pins:
         obs = store.observation.get(pin["observation_id"])
         if not obs:
             fail("pinned observation is missing")
         if obs.get("tombstoned"):
             fail("pinned observation is tombstoned without a surviving attestation")
-        recomputed = observation_hash(obs["envelope"])
+        try:
+            recomputed = observation_hash(obs["envelope"])
+        except KernelError:
+            fail("observation content is not canonical")
         if recomputed != obs["observation_hash"] or recomputed != pin["observation_hash"]:
             fail("observation content does not match the sealed pin hash")
 
@@ -716,9 +755,9 @@ def verify_freeze(store: Store, manifest_id: str, security_id: str) -> dict:
 
     ast = store.rule.get((man["rule_id"], man["rule_version"]))
     if ast is None:
-        raise VerifyError("RULE_UNAVAILABLE", "sealed rule is missing")
+        fail("sealed rule is missing", "RULE_UNAVAILABLE")
     if rule_ast_hash(ast) != man["rule_ast_hash"]:
-        raise VerifyError("RULE_MISMATCH", "loaded rule does not match the sealed digest")
+        fail("loaded rule does not match the sealed digest", "RULE_MISMATCH")
 
     card = sealed["card"]
     ev = evaluate(ast, {
@@ -822,6 +861,7 @@ def build_intact_fixture():
     man_h = manifest_hash(canonical)
     engine_h = _h64("4")
     cost_h = _h64("5")
+    canonical_text = canon(canonical).decode("utf-8")
     in_h = input_hash("man-1", "SEC-A", man_h, snap, rule_h, engine_h, cost_h, 3,
                       [(p["observation_id"], p["observation_hash"]) for p in pins])
     ev = evaluate(ast, card)
@@ -830,7 +870,7 @@ def build_intact_fixture():
 
     st.rule[("rule-1", "v1")] = ast
     st.manifest["man-1"] = {
-        "canonical_content": canonical,
+        "canonical_content": canonical_text,
         "manifest_hash": man_h,
         "rule_ast_hash": rule_h,
         "evaluator_artifact_hash": engine_h,
@@ -869,6 +909,7 @@ class VerifierProbes(unittest.TestCase):
 
     def test_01_intact_is_byte_verified(self):
         st = build_intact_fixture()
+        self.assertIsInstance(st.manifest["man-1"]["canonical_content"], str)
         out = verify_freeze(st, "man-1", "SEC-A")
         self.assertEqual(out["verification_level"], "BYTE_VERIFIED")
         self.assertEqual(out["decision"], "PREDICT")
@@ -965,8 +1006,9 @@ class VerifierProbes(unittest.TestCase):
 
     def test_13_manifest_content_change_old_hash_column(self):
         st = build_intact_fixture()
-        st.manifest["man-1"]["canonical_content"] = dict(st.manifest["man-1"]["canonical_content"])
-        st.manifest["man-1"]["canonical_content"]["session_date"] = "2026-09-05"
+        obj = json.loads(st.manifest["man-1"]["canonical_content"])
+        obj["session_date"] = "2026-09-05"
+        st.manifest["man-1"]["canonical_content"] = canon(obj).decode("utf-8")
         with self.assertRaises(VerifyError) as cm:
             verify_freeze(st, "man-1", "SEC-A")
         self.assertIn("manifest content", cm.exception.detail)
@@ -991,6 +1033,25 @@ class VerifierProbes(unittest.TestCase):
         with self.assertRaises(VerifyError) as cm:
             verify_freeze(st, "man-1", "SEC-A")
         self.assertIn("pin", cm.exception.detail)
+
+    def test_15b_jointly_swapped_pin_indexes_rejected(self):
+        st = build_intact_fixture()
+        swapped = [
+            {**st.sealed_pins[("man-1", "SEC-A")][0], "pin_index": 1, "observation_id": "obs-z"},
+            {**st.sealed_pins[("man-1", "SEC-A")][1], "pin_index": 0, "observation_id": "obs-a"},
+        ]
+        # Keep hashes attached to the original ids.
+        ha = st.observation["obs-a"]["observation_hash"]
+        hz = st.observation["obs-z"]["observation_hash"]
+        swapped = [
+            {"observation_id": "obs-z", "observation_hash": hz, "pin_index": 0},
+            {"observation_id": "obs-a", "observation_hash": ha, "pin_index": 1},
+        ]
+        st.sealed_pins[("man-1", "SEC-A")] = swapped
+        st.freeze_pins["frz-1"] = [dict(p) for p in swapped]
+        with self.assertRaises(VerifyError) as cm:
+            verify_freeze(st, "man-1", "SEC-A")
+        self.assertIn("pin_index", cm.exception.detail)
 
     def test_16_incorrect_stored_pin_count(self):
         st = build_intact_fixture()

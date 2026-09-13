@@ -232,7 +232,8 @@ export async function postAlpacaCloseImpl(userId: string, symbol: string) {
 }
 
 export async function runAutoCycleImpl(userId: string) {
-  await identityOf(userId);
+  const { role } = await identityOf(userId);
+  requireOperator(role);
   const { runAutoCycle } = await import("./auto-trade");
   return runAutoCycle(userId);
 }
