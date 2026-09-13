@@ -1,25 +1,27 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
-import { DeskShell, Empty, Err, Panel, SessionTabs } from "@/components/desk-shell";
+import { useEffect, useMemo, useState } from "react";
+import { AppShell, Badge, Empty, Err, PageHeader, Panel, SessionTabs } from "@/components/app-shell";
 import { fetchEarnings } from "@/desk/server-fns";
+import { decisionLabel, infoStatus, pct, timingLabel } from "@/ui/labels";
 
 export const Route = createFileRoute("/earnings")({
   validateSearch: (raw: Record<string, unknown>) => ({
     session: typeof raw.session === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw.session) ? raw.session : undefined,
   }),
+  head: () => ({ meta: [{ title: "Earnings | Trading App" }] }),
   component: Earnings,
 });
 
 function Earnings() {
   const { session } = Route.useSearch();
   return (
-    <DeskShell>
-      <EarningsLoader session={session} />
-    </DeskShell>
+    <AppShell>
+      <Loader session={session} />
+    </AppShell>
   );
 }
 
-function EarningsLoader({ session }: { session?: string }) {
+function Loader({ session }: { session?: string }) {
   const [data, setData] = useState<Awaited<ReturnType<typeof fetchEarnings>> | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -36,74 +38,151 @@ function EarningsLoader({ session }: { session?: string }) {
 
 function Body({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchEarnings>>, { needs_role: true }> }) {
   const d = data.data;
+  const [q, setQ] = useState("");
+  const [tab, setTab] = useState<"list" | "excluded">("list");
+  const [detail, setDetail] = useState<string | null>(null);
+
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return d.members.filter((m) => !needle || m.ticker.toLowerCase().includes(needle) || (m.name ?? "").toLowerCase().includes(needle));
+  }, [d.members, q]);
+
+  const selected = d.members.find((m) => m.permanent_security_id === detail) ?? null;
+
   return (
-    <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="text-xl font-medium tracking-tight">Earnings</h1>
-        <p className="mt-1 text-sm text-muted">
-          Session {d.session_date} · sealed snapshot only · post-seal quotes are not used for the card
-        </p>
-      </div>
+    <div className="flex flex-col gap-6">
+      <PageHeader title="Earnings" purpose="After-close reports being considered for the selected session." />
       <SessionTabs sessions={d.sessions ?? []} active={d.session_date} to="/earnings" />
-      <div className="grid gap-3 md:grid-cols-2">
-        {d.members.map((m) => (
-          <article key={m.permanent_security_id} className="rounded-xl border border-border bg-surface p-4">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <h2 className="text-sm font-medium" title={m.permanent_security_id}>
-                  {m.ticker}
-                </h2>
-                <p className="font-mono text-[11px] text-muted">{m.permanent_security_id}</p>
-              </div>
-              <span className="rounded-full border border-border px-2 py-0.5 text-[10px] uppercase tracking-wider text-muted">
-                {m.timing_quality === "ISSUER_CONFIRMED" ? "issuer AMC" : m.timing_quality}
-              </span>
+      <p className="text-sm text-muted">Locked session inputs · {d.session_date} · Sample data</p>
+
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          className={"min-h-11 rounded-sm px-3 text-sm " + (tab === "list" ? "bg-selected text-info" : "border border-border")}
+          onClick={() => setTab("list")}
+        >
+          Session list ({d.members.length})
+        </button>
+        <button
+          type="button"
+          className={"min-h-11 rounded-sm px-3 text-sm " + (tab === "excluded" ? "bg-selected text-info" : "border border-border")}
+          onClick={() => setTab("excluded")}
+        >
+          Excluded ({d.exclusions.length})
+        </button>
+      </div>
+
+      {tab === "list" ? (
+        <>
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search company or ticker"
+            className="min-h-12 max-w-md rounded-sm border border-control bg-surface px-3 text-base"
+          />
+          {q && filtered.length === 0 ? (
+            <Empty>No companies match your filters.</Empty>
+          ) : d.members.length === 0 ? (
+            <Empty>No eligible reports available.</Empty>
+          ) : (
+            <div className="overflow-x-auto" aria-label="Session companies">
+              <table className="w-full min-w-[40rem] text-left text-sm">
+                <caption className="sr-only">Companies locked for this earnings session</caption>
+                <thead className="text-xs font-medium text-muted">
+                  <tr>
+                    <th className="pb-2 font-medium">Company</th>
+                    <th className="pb-2 font-medium">Earnings</th>
+                    <th className="pb-2 font-medium">Required information</th>
+                    <th className="pb-2 font-medium">Rule outcome</th>
+                    <th className="pb-2 font-medium">Next action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((m) => (
+                    <tr key={m.permanent_security_id} className="h-14 border-t border-border">
+                      <td>
+                        <div className="font-medium">{m.ticker}</div>
+                        <div className="text-sm text-muted">{m.name}</div>
+                      </td>
+                      <td>{timingLabel(m.timing_quality)}</td>
+                      <td>{infoStatus(m.card_complete, m.options_valid)}</td>
+                      <td>
+                        <Badge tone={m.decision === "PREDICT" ? "info" : "neutral"}>
+                          {decisionLabel(m.decision, m.reasons)}
+                        </Badge>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="min-h-11 text-sm font-medium text-info"
+                          onClick={() => setDetail(m.permanent_security_id)}
+                        >
+                          View details
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-            <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
+          )}
+        </>
+      ) : (
+        <Panel title="Excluded candidates">
+          {d.exclusions.length === 0 ? (
+            <Empty>No exclusions for this session.</Empty>
+          ) : (
+            <ul className="grid gap-2">
+              {d.exclusions.map((e) => (
+                <li key={e.permanent_security_id} className="rounded-sm bg-subtle px-3 py-2 text-sm">
+                  <span className="font-medium">{e.ticker}</span>
+                  <span className="text-muted"> · {e.reason_codes.join(", ") || e.status}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+      )}
+
+      {selected ? (
+        <div className="fixed inset-0 z-40 flex justify-end bg-nav/40" role="dialog" aria-modal="true" aria-labelledby="earn-detail">
+          <div className="flex h-full w-full max-w-[560px] flex-col overflow-y-auto bg-surface p-6">
+            <div className="flex items-start justify-between gap-3">
               <div>
-                <dt className="text-muted">Card</dt>
-                <dd className="font-mono">{m.card_complete ? "complete" : "incomplete"}</dd>
+                <p className="text-sm text-muted">{selected.ticker}</p>
+                <h2 id="earn-detail" className="text-xl font-semibold">
+                  {selected.name}
+                </h2>
+              </div>
+              <button type="button" className="min-h-11 rounded-sm border border-border px-3 text-sm" onClick={() => setDetail(null)}>
+                Close
+              </button>
+            </div>
+            <p className="mt-3 text-base">{timingLabel(selected.timing_quality)}</p>
+            <p className="mt-1 text-sm text-muted">These inputs were locked before the decision. Newer observations are not used in this record.</p>
+            <h3 className="mt-6 text-base font-semibold">Information used</h3>
+            <dl className="mt-3 grid gap-3 text-sm">
+              <div>
+                <dt className="text-muted">Options-implied move proxy</dt>
+                <dd className="font-medium tabular-nums">{selected.implied_move ? pct(selected.implied_move) : "Not available"}</dd>
+                <p className="text-xs text-muted">An option-price-based size estimate; not a probability or direction forecast.</p>
               </div>
               <div>
-                <dt className="text-muted">Options</dt>
-                <dd className="font-mono">{m.options_valid ? "valid" : "missing / invalid"}</dd>
+                <dt className="text-muted">Five-day relative return</dt>
+                <dd className="font-medium tabular-nums">{selected.benchmark_relative_5d ? pct(selected.benchmark_relative_5d) : "Not available"}</dd>
               </div>
               <div>
-                <dt className="text-muted">Implied move</dt>
-                <dd className="font-mono">{m.implied_move ?? "—"}</dd>
+                <dt className="text-muted">63-day relative return</dt>
+                <dd className="font-medium tabular-nums">{selected.benchmark_relative_63d ? pct(selected.benchmark_relative_63d) : "Not available"}</dd>
               </div>
               <div>
-                <dt className="text-muted">Pins</dt>
-                <dd className="font-mono">{m.pin_count}</dd>
-              </div>
-              <div>
-                <dt className="text-muted">Rel 5d</dt>
-                <dd className="font-mono">{m.benchmark_relative_5d ?? "—"}</dd>
-              </div>
-              <div>
-                <dt className="text-muted">Rel 63d</dt>
-                <dd className="font-mono">{m.benchmark_relative_63d ?? "—"}</dd>
+                <dt className="text-muted">Options validity</dt>
+                <dd>{selected.options_valid == null ? "Not available" : selected.options_valid ? "Valid" : "Invalid source value"}</dd>
               </div>
             </dl>
-          </article>
-        ))}
-      </div>
-      <Panel title="Exclusions">
-        {d.exclusions.length === 0 ? (
-          <Empty>No excluded candidates on this sealed session.</Empty>
-        ) : (
-          <ul className="space-y-2 text-sm">
-            {d.exclusions.map((e) => (
-              <li key={e.permanent_security_id} className="flex justify-between gap-3 border-b border-border py-2">
-                <span>
-                  {e.ticker} <span className="font-mono text-[11px] text-muted">{e.permanent_security_id}</span>
-                </span>
-                <span className="font-mono text-xs text-muted">{e.reason_codes.join(", ")}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Panel>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

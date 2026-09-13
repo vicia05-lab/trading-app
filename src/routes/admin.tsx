@@ -1,23 +1,42 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { DeskShell, Empty, Err, Panel } from "@/components/desk-shell";
-import { AlpacaKeyInsert } from "@/components/alpaca-keys";
+import { AppShell, Badge, Empty, Err, PageHeader, Panel } from "@/components/app-shell";
+import { AlpacaDataSecrets } from "@/components/alpaca-data-secrets";
 import { fetchAdmin, postFireNote, postPause, postPrintKnowledge, postResume, postRetryDeadlines } from "@/desk/server-fns";
+import { jobPurpose } from "@/ui/labels";
 
-export const Route = createFileRoute("/admin")({ component: Admin });
+export const Route = createFileRoute("/admin")({
+  head: () => ({ meta: [{ title: "Admin | Trading App" }] }),
+  component: Admin,
+});
 
 function Admin() {
   return (
-    <DeskShell>
-      <div className="flex flex-col gap-8">
-        <div>
-          <h1 className="text-xl font-medium tracking-tight">Admin</h1>
-          <p className="mt-1 text-sm text-muted">Paste Alpaca keys in the fields below. Desk operations sit under that.</p>
-        </div>
-        <AlpacaKeyInsert />
+    <AppShell>
+      <div className="mx-auto flex max-w-[1040px] flex-col gap-8">
+        <PageHeader title="Admin" purpose="Connections and safe controls for this simulated research workspace." />
+        <nav className="hidden flex-wrap gap-3 text-sm md:flex" aria-label="Admin sections">
+          <a href="#connections" className="text-info">
+            Connections
+          </a>
+          <a href="#controls" className="text-info">
+            Paper controls
+          </a>
+          <a href="#status" className="text-info">
+            System status
+          </a>
+          <a href="#rules" className="text-info">
+            Rules & review
+          </a>
+        </nav>
+        <section id="connections" className="scroll-mt-24">
+          <h2 className="mb-4 text-xl font-semibold">Connections</h2>
+          <p className="mb-4 text-sm text-muted">These keys belong to your signed-in account. Saving them does not place orders or enable live trading.</p>
+          <AlpacaDataSecrets />
+        </section>
         <AdminOps />
       </div>
-    </DeskShell>
+    </AppShell>
   );
 }
 
@@ -32,7 +51,6 @@ function AdminOps() {
   useEffect(() => {
     void reload().catch((e) => setError(e instanceof Error ? e.message : "Could not load admin"));
   }, []);
-
   async function run(label: string, fn: () => Promise<unknown>) {
     setNote(null);
     try {
@@ -43,183 +61,197 @@ function AdminOps() {
       setNote(e instanceof Error ? e.message : "Action failed");
     }
   }
-
   if (error) return <Err>{error}</Err>;
-  if (!data) return <Empty>Loading desk operations…</Empty>;
+  if (!data) return <Empty>Loading system status…</Empty>;
   if ("needs_role" in data) return null;
-  return (
-    <div className="flex flex-col gap-4">
-      {note ? <p className="text-sm text-muted">{note}</p> : null}
-      <OpsBody data={data} run={run} />
-    </div>
-  );
+  const d = data.data;
+  return <Ops data={d} note={note} run={run} />;
 }
 
-function OpsBody({
-  data,
+function Ops({
+  data: d,
+  note,
   run,
 }: {
-  data: Exclude<Awaited<ReturnType<typeof fetchAdmin>>, { needs_role: true }>;
+  data: Exclude<Awaited<ReturnType<typeof fetchAdmin>>, { needs_role: true }>["data"];
+  note: string | null;
   run: (label: string, fn: () => Promise<unknown>) => void;
 }) {
-  const d = data.data;
   const [reason, setReason] = useState("operational pause");
   const [hyp, setHyp] = useState<"IMPLEMENTATION_BUG" | "COVERAGE_SHIFT" | "REGIME_SHIFT">("COVERAGE_SHIFT");
   const [fire, setFire] = useState("");
   const [pk, setPk] = useState({ eventKey: "", securityId: "", reason: "" });
+  const paused = d.admission_paused;
   return (
-    <div className="flex flex-col gap-4">
-      <h2 className="text-sm font-medium tracking-tight text-muted">Desk operations</h2>
-      <Panel title="Admission gate" aside={d.admission_paused ? "PAUSED" : "open"}>
-        {d.can_mutate ? (
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <input
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              className="min-h-11 flex-1 rounded-md border border-border bg-sunken px-3 text-sm"
-              placeholder="Pause reason"
-            />
-            <button
-              type="button"
-              className="min-h-11 rounded-md border border-border px-4 text-sm"
-              onClick={() => run("Paused", () => postPause({ data: { reason } }))}
+    <>
+      {note ? (
+        <p className="text-sm text-muted" role="status">
+          {note}
+        </p>
+      ) : null}
+
+      <section id="controls" className="scroll-mt-24 flex flex-col gap-4">
+        <h2 className="text-xl font-semibold">Paper controls</h2>
+        <Panel
+          title="New paper entries"
+          aside={paused ? "Paused" : "Allowed"}
+        >
+          <p className="mb-4 text-sm text-muted">
+            Pause prevents new reservations, but data collection, scheduled reviews, valid exits, and reconciliation
+            continue when their dependencies are healthy. Applies to new paper positions across the workspace.
+          </p>
+          {d.can_mutate ? (
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                className="min-h-12 flex-1 rounded-sm border border-control bg-surface px-3 text-base"
+                placeholder="Pause reason"
+              />
+              <button
+                type="button"
+                className="min-h-11 rounded-sm border border-control px-4 text-sm"
+                onClick={() => run("New paper positions paused.", () => postPause({ data: { reason } }))}
+              >
+                Pause new paper positions
+              </button>
+              <button
+                type="button"
+                className="min-h-11 rounded-sm bg-primary px-4 text-sm font-medium text-primary-fg"
+                onClick={() => run("New paper positions allowed.", () => postResume())}
+              >
+                Resume
+              </button>
+            </div>
+          ) : (
+            <Empty>Reviewer can read this control but cannot change it.</Empty>
+          )}
+        </Panel>
+        <details className="rounded-md border border-border bg-surface p-4">
+          <summary className="min-h-11 cursor-pointer font-medium">Special event handling</summary>
+          <p className="mt-2 text-sm text-muted">
+            Use for results known earlier than the permitted decision/entry horizon. Normal scheduled after-close
+            releases are not early-result incidents.
+          </p>
+          {d.can_mutate ? (
+            <form
+              className="mt-3 grid gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                run("Early-result knowledge recorded.", () =>
+                  postPrintKnowledge({ data: { eventKey: pk.eventKey, securityId: pk.securityId, reason: pk.reason } }),
+                );
+              }}
             >
-              Pause
-            </button>
-            <button
-              type="button"
-              className="min-h-11 rounded-md bg-primary px-4 text-sm text-primary-fg"
-              onClick={() => run("Resumed", () => postResume())}
-            >
-              Resume
-            </button>
-          </div>
-        ) : (
-          <Empty>Reviewer cannot mutate admission.</Empty>
-        )}
-        {d.pause_reason ? <p className="mt-2 text-xs text-muted">{d.pause_reason}</p> : null}
-      </Panel>
-      <Panel title="Jobs">
-        <ul className="divide-y divide-border text-sm">
-          {d.jobs.map((j) => (
-            <li key={j.job_name} className="flex justify-between py-2 font-mono text-xs">
-              <span>{j.job_name}</span>
-              <span className="text-muted">{j.status}</span>
-            </li>
-          ))}
-        </ul>
-        {d.can_mutate ? (
-          <button
-            type="button"
-            className="mt-3 min-h-11 rounded-md border border-border px-4 text-sm"
-            onClick={() => run("Deadlines retried", () => postRetryDeadlines())}
-          >
-            Retry due deadlines
-          </button>
-        ) : null}
-      </Panel>
-      <Panel title="Deadlines">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[28rem] text-left text-xs">
-            <thead className="text-[11px] uppercase tracking-wider text-muted">
-              <tr>
-                <th className="pb-2 font-medium">Kind</th>
-                <th className="pb-2 font-medium">Scheduled</th>
-                <th className="pb-2 font-medium">Applied</th>
-              </tr>
-            </thead>
-            <tbody className="font-mono">
-              {d.deadlines.map((x, i) => (
-                <tr key={i} className="border-t border-border">
-                  <td className="py-2">{x.kind}</td>
-                  <td className="py-2">{x.scheduled_at}</td>
-                  <td className="py-2">{x.applied_at ?? (x.overdue ? "OVERDUE" : "pending")}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Panel>
-      <Panel title="Alarms">
-        {d.alarms.length === 0 ? (
-          <Empty>No open operational alarms.</Empty>
-        ) : (
-          <ul className="space-y-2 text-sm">
-            {d.alarms.map((a, i) => (
-              <li key={i} className="rounded-md border border-border px-3 py-2">
-                <div className="flex justify-between gap-2">
-                  <span className="font-mono text-xs">{a.code}</span>
-                  <span className="text-[11px] text-muted">{a.status}</span>
+              <input
+                className="min-h-12 rounded-sm border border-control px-3"
+                placeholder="Event key"
+                value={pk.eventKey}
+                onChange={(e) => setPk({ ...pk, eventKey: e.target.value })}
+              />
+              <input
+                className="min-h-12 rounded-sm border border-control px-3"
+                placeholder="Company id"
+                value={pk.securityId}
+                onChange={(e) => setPk({ ...pk, securityId: e.target.value })}
+              />
+              <input
+                className="min-h-12 rounded-sm border border-control px-3"
+                placeholder="Reason"
+                value={pk.reason}
+                onChange={(e) => setPk({ ...pk, reason: e.target.value })}
+              />
+              <button type="submit" className="min-h-11 rounded-sm border border-control px-4 text-sm">
+                Record early results
+              </button>
+            </form>
+          ) : null}
+        </details>
+      </section>
+
+      <section id="status" className="scroll-mt-24 flex flex-col gap-4">
+        <h2 className="text-xl font-semibold">System status</h2>
+        <Panel title="Scheduled work">
+          <ul className="grid gap-2">
+            {d.jobs.map((j) => (
+              <li key={j.job_name} className="flex min-h-14 items-center justify-between gap-3 border-b border-border py-2 text-sm">
+                <div>
+                  <p className="font-medium">{jobPurpose(j.job_name)}</p>
+                  <p className="text-muted">{j.job_name}</p>
                 </div>
-                <p className="mt-1 text-xs text-muted">
-                  {a.component}
-                  {a.blocks_new_admission ? " · blocks new admission" : ""}
-                </p>
+                <Badge tone={j.status === "FAILED" ? "danger" : j.status === "RUNNING" ? "warn" : "neutral"}>{j.status}</Badge>
               </li>
             ))}
           </ul>
-        )}
-      </Panel>
-      <Panel title="Early-result knowledge">
-        {d.can_mutate ? (
-          <div className="grid gap-2">
-            <input className="min-h-11 rounded-md border border-border bg-sunken px-3 text-sm" placeholder="Event key" value={pk.eventKey} onChange={(e) => setPk({ ...pk, eventKey: e.target.value })} />
-            <input className="min-h-11 rounded-md border border-border bg-sunken px-3 text-sm" placeholder="Permanent security id" value={pk.securityId} onChange={(e) => setPk({ ...pk, securityId: e.target.value })} />
-            <input className="min-h-11 rounded-md border border-border bg-sunken px-3 text-sm" placeholder="Reason" value={pk.reason} onChange={(e) => setPk({ ...pk, reason: e.target.value })} />
+          {d.can_mutate ? (
             <button
               type="button"
-              className="min-h-11 rounded-md border border-border text-sm"
-              onClick={() => run("Knowledge recorded", () => postPrintKnowledge({ data: pk }))}
+              className="mt-4 min-h-11 rounded-sm border border-control px-4 text-sm"
+              onClick={() => run("Retry scheduled job requested.", () => postRetryDeadlines())}
             >
-              Append knowledge
+              Retry scheduled job
             </button>
-          </div>
-        ) : (
-          <Empty>Operator only.</Empty>
-        )}
-      </Panel>
-      <Panel title="Fire-rate note">
-        {d.can_mutate ? (
-          <div className="grid gap-2">
-            <select
-              className="min-h-11 rounded-md border border-border bg-sunken px-3 text-sm"
-              value={hyp}
-              onChange={(e) => setHyp(e.target.value as typeof hyp)}
+          ) : null}
+        </Panel>
+        <Panel title="Unresolved issues" aside={`${d.alarms.length}`}>
+          {d.alarms.length === 0 ? (
+            <Empty>No unresolved alarms.</Empty>
+          ) : (
+            <ul className="grid gap-2">
+              {d.alarms.map((a, i) => (
+                <li key={a.code + i} className="rounded-sm bg-danger-bg px-3 py-2 text-sm text-danger">
+                  {a.code} · {a.component}
+                  {a.blocks_new_admission ? " · New paper entries are disabled while this record is checked." : ""}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+      </section>
+
+      <section id="rules" className="scroll-mt-24 flex flex-col gap-4">
+        <h2 className="text-xl font-semibold">Rules & review</h2>
+        <Panel title="Current rule" aside="rule-v1">
+          <p className="text-sm leading-relaxed">
+            Predict long when issuer-confirmed after-close timing, a complete card, valid options, an options-implied
+            move proxy between 4% and 15%, five-day relative return below the benchmark, and 63-day relative return
+            above the benchmark. Otherwise no qualifying setup.
+          </p>
+          <p className="mt-3 text-sm text-muted">The initial rule was selected after prior observation.</p>
+        </Panel>
+        <Panel title="Review note">
+          {d.can_mutate ? (
+            <form
+              className="grid gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                run("Review note saved.", () => postFireNote({ data: { hypothesis: hyp, note: fire } }));
+              }}
             >
-              <option value="IMPLEMENTATION_BUG">IMPLEMENTATION_BUG</option>
-              <option value="COVERAGE_SHIFT">COVERAGE_SHIFT</option>
-              <option value="REGIME_SHIFT">REGIME_SHIFT</option>
-            </select>
-            <textarea className="rounded-md border border-border bg-sunken px-3 py-2 text-sm" rows={3} value={fire} onChange={(e) => setFire(e.target.value)} />
-            <button
-              type="button"
-              className="min-h-11 rounded-md border border-border text-sm"
-              onClick={() => run("Note stored", () => postFireNote({ data: { hypothesis: hyp, note: fire } }))}
-            >
-              Append note
-            </button>
-          </div>
-        ) : (
-          <Empty>Operator only.</Empty>
-        )}
-        <ul className="mt-3 space-y-1 text-xs text-muted">
-          {d.fire_rate_notes.map((n, i) => (
-            <li key={i}>
-              <span className="font-mono">{n.hypothesis}</span> — {n.note}
-            </li>
-          ))}
-        </ul>
-      </Panel>
-      <Panel title="Data ports">
-        <dl className="grid grid-cols-2 gap-2 text-xs md:grid-cols-3">
-          {Object.entries(d.ports).map(([k, v]) => (
-            <div key={k}>
-              <dt className="text-muted">{k}</dt>
-              <dd className="font-mono">{v}</dd>
-            </div>
-          ))}
-        </dl>
-      </Panel>
-    </div>
+              <select
+                className="min-h-12 rounded-sm border border-control px-3 text-base"
+                value={hyp}
+                onChange={(e) => setHyp(e.target.value as typeof hyp)}
+              >
+                <option value="IMPLEMENTATION_BUG">Possible implementation issue</option>
+                <option value="COVERAGE_SHIFT">Data coverage changed</option>
+                <option value="REGIME_SHIFT">Market conditions changed</option>
+              </select>
+              <textarea
+                className="min-h-24 rounded-sm border border-control px-3 py-2 text-base"
+                value={fire}
+                onChange={(e) => setFire(e.target.value)}
+                placeholder="Note"
+              />
+              <button type="submit" className="min-h-11 self-start rounded-sm bg-primary px-4 text-sm font-medium text-primary-fg">
+                Save review note
+              </button>
+            </form>
+          ) : (
+            <Empty>Reviewer notes are operator-only.</Empty>
+          )}
+        </Panel>
+      </section>
+    </>
   );
 }

@@ -99,6 +99,27 @@ export async function homePayload(role: DeskRole) {
          JOIN (SELECT position_id, MAX(vintage) AS v FROM book_vintage GROUP BY position_id) t
            ON t.position_id = bv.position_id AND t.v = bv.vintage`,
       );
+  const openPos = await sql.query<{
+    position_id: string;
+    ticker: string;
+    name: string;
+    session_date: string;
+    notional: string;
+    state: string;
+  }>(
+    `SELECT p.position_id, p.display_ticker AS ticker, COALESCE(s.display_name, p.display_ticker) AS name,
+            p.intended_event_session::text AS session_date, p.original_reserved_notional::text AS notional, p.state
+     FROM "position" p
+     LEFT JOIN security s ON s.permanent_security_id = p.permanent_security_id
+     WHERE p.state <> 'CLOSED'
+     ORDER BY p.display_ticker`,
+  );
+  const predictCount = latest
+    ? await sql.query<{ c: number }>(
+        `SELECT COUNT(*)::int AS c FROM "freeze" WHERE manifest_id = $1 AND decision = 'PREDICT'`,
+        [latest.manifest_id],
+      )
+    : [{ c: 0 }];
   return wrap("home-1", clock, {
     role,
     data_mode: "FIXTURE",
@@ -137,6 +158,8 @@ export async function homePayload(role: DeskRole) {
     report_as_of: snap[0]?.created_at ?? null,
     reviewer_book: book ? { latest_paper_pnl: book[0].pnl, priced_vintages: String(book[0].priced) } : null,
     research_complete_does_not_imply_book_clear: true,
+    predict_count: String(predictCount[0].c),
+    open_positions: openPos,
     alpaca: await publicStatus(),
   });
 }
@@ -172,11 +195,16 @@ export async function earningsPayload(role: DeskRole, sessionDate?: string) {
     card_complete: boolean;
     options_valid: boolean | null;
     pin_count: number;
+    display_name: string | null;
+    decision: string | null;
+    output_payload: { reasons?: string[] } | null;
   }>(
     `SELECT m.permanent_security_id, m.display_ticker, m.event_key, m.timing_quality, m.shuffle_order_index,
-            s.card, s.card_complete, s.options_valid, s.pin_count
+            s.card, s.card_complete, s.options_valid, s.pin_count, sec.display_name, f.decision, f.output_payload
      FROM manifest_member m JOIN sealed_input s
        ON s.manifest_id = m.manifest_id AND s.permanent_security_id = m.permanent_security_id
+     LEFT JOIN security sec ON sec.permanent_security_id = m.permanent_security_id
+     LEFT JOIN "freeze" f ON f.manifest_id = m.manifest_id AND f.permanent_security_id = m.permanent_security_id
      WHERE m.manifest_id = $1
      ORDER BY m.display_ticker`,
     [man[0].manifest_id],
@@ -199,6 +227,7 @@ export async function earningsPayload(role: DeskRole, sessionDate?: string) {
     members: members.map((m) => ({
       permanent_security_id: m.permanent_security_id,
       ticker: m.display_ticker,
+      name: m.display_name ?? m.display_ticker,
       event_key: m.event_key,
       timing_quality: m.timing_quality,
       card_complete: m.card_complete,
@@ -207,6 +236,8 @@ export async function earningsPayload(role: DeskRole, sessionDate?: string) {
       implied_move: typeof m.card.implied_move === "string" ? m.card.implied_move : null,
       benchmark_relative_5d: typeof m.card.benchmark_relative_5d === "string" ? m.card.benchmark_relative_5d : null,
       benchmark_relative_63d: typeof m.card.benchmark_relative_63d === "string" ? m.card.benchmark_relative_63d : null,
+      decision: m.decision,
+      reasons: m.output_payload?.reasons ?? [],
       shuffle_order_index: role === "OPERATOR" ? null : String(m.shuffle_order_index),
     })),
     exclusions: exclusions.map((e) => ({
@@ -283,6 +314,7 @@ export async function predictionsPayload(role: DeskRole, manifestId?: string, se
     rows: rows.map((r) => ({
       permanent_security_id: r.permanent_security_id,
       ticker: r.display_ticker,
+      name: r.display_ticker,
       status: r.freeze_id ? r.decision : "NO_FREEZE",
       direction: r.decision === "PREDICT" ? r.direction : null,
       execution:
