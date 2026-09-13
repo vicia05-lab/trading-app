@@ -179,8 +179,32 @@ function Research({
     grades: Array<Record<string, unknown>>;
   };
 }) {
+  const sessions = Array.from(new Set(r.grades.map((g) => String(g.session_date ?? "")))).filter(Boolean);
+  const [session, setSession] = useState<string>("ALL");
+  const grades = session === "ALL" ? r.grades : r.grades.filter((g) => String(g.session_date) === session);
   return (
     <div>
+      {sessions.length > 1 ? (
+        <div className="mb-4 flex flex-wrap gap-2" role="tablist" aria-label="Reporting session">
+          <button
+            type="button"
+            className={"min-h-11 rounded-sm px-3 text-sm " + (session === "ALL" ? "bg-selected text-info" : "border border-border")}
+            onClick={() => setSession("ALL")}
+          >
+            All sessions
+          </button>
+          {sessions.map((s) => (
+            <button
+              key={s}
+              type="button"
+              className={"min-h-11 rounded-sm px-3 text-sm " + (session === s ? "bg-selected text-info" : "border border-border")}
+              onClick={() => setSession(s)}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <Stat label="Usable clean labels" value={r.clean_predict_n} />
         <Stat label="Directional hits" value={r.direction_hits} hint={`of ${r.clean_predict_n} usable labels`} />
@@ -203,7 +227,7 @@ function Research({
             </tr>
           </thead>
           <tbody>
-            {r.grades.map((g) => (
+            {grades.map((g) => (
               <tr key={String(g.id) + String(g.session_date)} className="h-14 border-t border-border">
                 <td>
                   <TickerButton symbol={String(g.ticker)} />

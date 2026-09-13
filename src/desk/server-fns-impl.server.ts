@@ -1,5 +1,5 @@
 import { ensureBootstrapped } from "./bootstrap";
-import { adminPayload, claimRole, earningsPayload, getOrCreatePrincipal, homePayload, predictionsPayload, resultsPayload } from "./queries";
+import { adminPayload, claimRole, earningsPayload, getOrCreatePrincipal, homePayload, noticesPayload, predictionsPayload, resultsPayload } from "./queries";
 import { pauseAdmission, resumeAdmission, recordPrintKnowledge, appendFireRateNote, applyDueDeadlines } from "./lifecycle";
 import { freezeMember } from "./commands";
 import { DeskError, newId } from "./util";
@@ -59,10 +59,10 @@ export async function claimRoleImpl(userId: string, role: "OPERATOR" | "REVIEWER
   return claimRole(userId, null, role);
 }
 
-export async function fetchHomeImpl(userId: string) {
+export async function fetchHomeImpl(userId: string, sessionDate?: string) {
   const { role } = await roleOf(userId);
   if (!role) return { needs_role: true as const };
-  return homePayload(role);
+  return homePayload(role, sessionDate);
 }
 
 export async function fetchEarningsImpl(userId: string, sessionDate?: string) {
@@ -87,6 +87,12 @@ export async function fetchAdminImpl(userId: string) {
   const { role } = await roleOf(userId);
   if (!role) return { needs_role: true as const };
   return adminPayload(role);
+}
+
+export async function fetchNoticesImpl(userId: string) {
+  const { role } = await roleOf(userId);
+  if (!role) return { needs_role: true as const };
+  return noticesPayload(role);
 }
 
 export async function postPauseImpl(userId: string, reason: string) {

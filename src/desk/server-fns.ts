@@ -21,9 +21,10 @@ export const postClaimRole = createServerFn({ method: "POST" })
 
 export const fetchHome = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
-  .handler(async ({ context }) => {
+  .validator(z.object({ sessionDate: z.string().optional() }).optional())
+  .handler(async ({ context, data }) => {
     const { fetchHomeImpl } = await import("./server-fns-impl.server");
-    return fetchHomeImpl(context.userId);
+    return fetchHomeImpl(context.userId, data?.sessionDate);
   });
 
 export const fetchEarnings = createServerFn({ method: "GET" })
@@ -54,6 +55,13 @@ export const fetchAdmin = createServerFn({ method: "GET" })
   .handler(async ({ context }) => {
     const { fetchAdminImpl } = await import("./server-fns-impl.server");
     return fetchAdminImpl(context.userId);
+  });
+
+export const fetchNotices = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const { fetchNoticesImpl } = await import("./server-fns-impl.server");
+    return fetchNoticesImpl(context.userId);
   });
 
 export const postPause = createServerFn({ method: "POST" })

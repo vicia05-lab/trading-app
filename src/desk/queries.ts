@@ -1,7 +1,8 @@
-import { getSql } from "@/lib/db";
+import { getSql, dbSource } from "@/lib/db";
 import { asHex, rfc3339, type DeskRole } from "./util";
 import { ensureBootstrapped } from "./bootstrap";
 import { publicStatus } from "./alpaca";
+import { cap, type Capability } from "@/ui/capability";
 
 export type Envelope<T> = {
   product_name: "Trading App";
@@ -40,7 +41,7 @@ function rate(num: number, den: number): { value: string | null; reason: string 
   return { value: (num / den).toFixed(12), reason: null };
 }
 
-export async function homePayload(role: DeskRole) {
+export async function homePayload(role: DeskRole, sessionDate?: string) {
   await ensureBootstrapped();
   const sql = await getSql();
   const clock = await asOf();
@@ -61,7 +62,8 @@ export async function homePayload(role: DeskRole) {
             admission_closed_event_seq, research_closed_event_seq
      FROM manifest ORDER BY session_date DESC`,
   );
-  const latest = sessions[0] ?? null;
+  const latest =
+    (sessionDate ? sessions.find((s) => s.session_date === sessionDate) : null) ?? sessions[0] ?? null;
   const frozen = latest
     ? await sql.query<{ c: number }>(`SELECT COUNT(*)::int AS c FROM "freeze" WHERE manifest_id = $1`, [latest.manifest_id])
     : [{ c: 0 }];
@@ -508,6 +510,80 @@ export async function adminPayload(role: DeskRole) {
     `SELECT position_id, display_ticker, state, cas_token::text FROM "position" ORDER BY display_ticker`,
   );
   const alpaca = await publicStatus();
+  const checked = clock;
+  const failedJobs = jobs.filter((j) => j.status === "FAILED");
+  const runningJobs = jobs.filter((j) => j.status === "RUNNING");
+  const completedJobs = jobs.filter((j) => j.last_completed_at);
+  const capabilities: Capability[] = [
+    cap({
+      id: "auth",
+      label: "Authentication",
+      state: "ready",
+      last_checked: checked,
+      reason: "This page required a signed-in session.",
+    }),
+    cap({
+      id: "database",
+      label: "Persistent database",
+      state: dbSource === "neon" ? "ready" : "sample",
+      last_checked: checked,
+      reason:
+        dbSource === "neon"
+          ? "A configured Postgres connection answered this request."
+          : "This preview uses an embedded sample database. It is not a durable production store.",
+    }),
+    cap({
+      id: "jobs",
+      label: "Durable jobs",
+      state: failedJobs.length ? "failed" : jobs.length === 0 ? "not_configured" : completedJobs.length ? "sample" : "not_checked",
+      last_checked: completedJobs[0]?.last_completed_at ?? null,
+      reason: failedJobs.length
+        ? `${failedJobs.length} scheduled job(s) last failed.`
+        : jobs.length === 0
+          ? "No scheduled-job records were returned."
+          : "Fixture scheduled jobs are recorded here. This is not proof of a durable production worker.",
+    }),
+    cap({
+      id: "secret_storage",
+      label: "Secret storage",
+      state: alpaca.connected ? "ready" : "not_configured",
+      last_checked: alpaca.last_ok_at ?? null,
+      reason: alpaca.connected
+        ? "A saved key record exists for this account."
+        : "No trading keys are saved. Missing storage is not treated as ready.",
+    }),
+    cap({
+      id: "alpaca_test",
+      label: "Limited Alpaca check",
+      state: alpaca.last_error ? "failed" : alpaca.last_ok_at ? "ready" : alpaca.connected ? "not_checked" : "not_configured",
+      last_checked: alpaca.last_ok_at ?? null,
+      reason: alpaca.last_error
+        ? "The last limited account check did not succeed."
+        : alpaca.last_ok_at
+          ? "A limited account check succeeded. This is not official-auction coverage."
+          : alpaca.connected
+            ? "Keys are saved. A limited account check has not been recorded."
+            : "Save keys, then run the limited check. A loaded page is not a passing test.",
+    }),
+    cap({
+      id: "official_marks",
+      label: "Official auction coverage",
+      state: "sample",
+      last_checked: checked,
+      reason: "Official open/close marks in this workspace are fixture records, not live auction coverage.",
+    }),
+    cap({
+      id: "running_jobs",
+      label: "Running jobs",
+      state: runningJobs.length ? "checking" : jobs.length ? "sample" : "not_configured",
+      last_checked: checked,
+      reason: runningJobs.length
+        ? `${runningJobs.length} job(s) currently marked running.`
+        : jobs.length
+          ? "No job is marked running. Idle fixture jobs are not a live worker heartbeat."
+          : "No job records were returned.",
+    }),
+  ];
   return wrap("adm-1", clock, {
     role,
     can_mutate: role === "OPERATOR",
@@ -525,6 +601,7 @@ export async function adminPayload(role: DeskRole) {
     fire_rate_notes: notes,
     positions,
     alpaca,
+    capabilities,
     ports: {
       security_master: "FIXTURE",
       calendar: "FIXTURE",
@@ -559,4 +636,50 @@ export async function claimRole(userId: string, email: string | null, role: "OPE
     [pid, userId, email ?? userId, role, role === "REVIEWER"],
   );
   return { role, already: false };
+}
+
+export async function noticesPayload(role: DeskRole) {
+  await ensureBootstrapped();
+  const sql = await getSql();
+  const clock = await asOf();
+  const alarms = await sql.query<{
+    code: string;
+    status: string;
+    last_seen: string;
+    blocks_new_admission: boolean;
+  }>(`SELECT code, status, last_seen::text, blocks_new_admission FROM ops_alarm WHERE status <> 'CLEARED' ORDER BY last_seen DESC LIMIT 12`);
+  const overdue = await sql.query<{ c: number }>(
+    `SELECT COUNT(*)::int AS c FROM deadline d, fixture_clock c WHERE d.applied_event_seq IS NULL AND d.scheduled_at <= c.now_utc`,
+  );
+  const { alarmLabel } = await import("@/ui/labels");
+  const items: Array<{
+    id: string;
+    severity: "info" | "warn" | "danger";
+    title: string;
+    detail: string;
+    at: string;
+    href: string;
+  }> = alarms.map((a) => {
+    const copy = alarmLabel(a.code);
+    return {
+      id: a.code + a.last_seen,
+      severity: (a.blocks_new_admission ? "danger" : "warn") as "danger" | "warn",
+      title: copy.title,
+      detail: copy.detail,
+      at: a.last_seen,
+      href: "/admin#status",
+    };
+  });
+  if ((overdue[0]?.c ?? 0) > 0) {
+    items.unshift({
+      id: "overdue-deadlines",
+      severity: "warn",
+      title: "Scheduled work is overdue",
+      detail: `${overdue[0].c} deadline(s) are past due on the fixture clock.`,
+      at: clock,
+      href: "/admin#status",
+    });
+  }
+  void role;
+  return wrap("notice-1", clock, { items });
 }

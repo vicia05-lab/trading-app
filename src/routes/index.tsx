@@ -1,36 +1,42 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { AppShell, Badge, Empty, Err, PageHeader, Panel, Stat } from "@/components/app-shell";
+import { AppShell, Badge, Empty, Err, PageHeader, Panel, SessionTabs, Stat } from "@/components/app-shell";
 import { fetchHome } from "@/desk/server-fns";
 import { fetchAlpacaDataSecret } from "@/desk/alpaca-data-fns";
 import { formatSession, money, positionStateLabel } from "@/ui/labels";
 import { TickerButton, TickerLookup } from "@/components/ticker-quote";
 
 export const Route = createFileRoute("/")({
+  validateSearch: (raw: Record<string, unknown>): { session?: string } => {
+    if (typeof raw.session === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw.session)) return { session: raw.session };
+    return {};
+  },
   head: () => ({ meta: [{ title: "Home | Trading App" }] }),
   component: Home,
 });
 
 function Home() {
+  const { session } = Route.useSearch();
   return (
     <AppShell>
-      <HomeLoader />
+      <HomeLoader session={session} />
     </AppShell>
   );
 }
 
-function HomeLoader() {
+function HomeLoader({ session }: { session?: string }) {
   const [data, setData] = useState<Awaited<ReturnType<typeof fetchHome>> | null>(null);
   const [secret, setSecret] = useState<Awaited<ReturnType<typeof fetchAlpacaDataSecret>> | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    void Promise.all([fetchHome(), fetchAlpacaDataSecret().catch(() => null)])
+    setData(null);
+    void Promise.all([fetchHome({ data: { sessionDate: session } }), fetchAlpacaDataSecret().catch(() => null)])
       .then(([h, s]) => {
         setData(h);
         setSecret(s);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Could not load home"));
-  }, []);
+  }, [session]);
   if (error) return <Err>{error}</Err>;
   if (!data) return <Empty>Loading session…</Empty>;
   if ("needs_role" in data) return <Empty>Access pending.</Empty>;
@@ -100,6 +106,7 @@ function HomeBody({
   return (
     <div className="flex flex-col gap-6">
       <PageHeader title="Home" purpose="Your earnings session, recorded decisions, and simulated positions." />
+      <SessionTabs sessions={d.sessions ?? []} active={s?.session_date} to="/" />
       <p className="text-sm text-muted">
         {s ? `${formatSession(s.session_date)} · US market time (ET)` : "No stored session"} · Sample data
       </p>

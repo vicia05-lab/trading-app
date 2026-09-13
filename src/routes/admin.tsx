@@ -4,6 +4,7 @@ import { AppShell, Badge, Empty, Err, PageHeader, Panel } from "@/components/app
 import { AlpacaDataSecrets } from "@/components/alpaca-data-secrets";
 import { fetchAdmin, postFireNote, postPause, postPrintKnowledge, postResume, postRetryDeadlines } from "@/desk/server-fns";
 import { alarmLabel, jobPurpose } from "@/ui/labels";
+import { capabilityLabel, capabilityTone, type Capability } from "@/ui/capability";
 
 export const Route = createFileRoute("/admin")({
   head: () => ({ meta: [{ title: "Admin | Trading App" }] }),
@@ -90,8 +91,39 @@ function Ops({
         </p>
       ) : null}
 
+      <Panel title="Workspace readiness">
+        <p className="mb-3 text-sm text-muted">
+          Each row is a recorded check. A missing result is Not checked — never Ready just because this page loaded.
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[36rem] text-left text-sm">
+            <caption className="sr-only">Workspace capability checks</caption>
+            <thead className="text-xs font-medium text-muted">
+              <tr>
+                <th className="pb-2 font-medium">Check</th>
+                <th className="pb-2 font-medium">Status</th>
+                <th className="pb-2 font-medium">Last checked</th>
+                <th className="pb-2 font-medium">Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(d.capabilities ?? []).map((c: Capability) => (
+                <tr key={c.id} className="h-14 border-t border-border">
+                  <td>{c.label}</td>
+                  <td>
+                    <Badge tone={capabilityTone(c.state)}>{capabilityLabel(c.state)}</Badge>
+                  </td>
+                  <td className="font-mono text-xs text-muted">{c.last_checked ? c.last_checked.slice(0, 19).replace("T", " ") : "—"}</td>
+                  <td className="text-muted">{c.reason}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+
       <Panel title="Source readiness">
-        <p className="mb-3 text-sm text-muted">Missing credentials do not become Ready because the page loaded.</p>
+        <p className="mb-3 text-sm text-muted">Research inputs for the earnings sleeve. Sample data is not live coverage.</p>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[36rem] text-left text-sm">
             <caption className="sr-only">Required research data sources</caption>
@@ -110,13 +142,29 @@ function Ops({
                 ["Stock quotes", d.ports.quotes],
                 ["Official closing prices", d.ports.official_marks],
                 ["Official opening prices", d.ports.official_marks],
-              ].map(([name, port]) => (
+              ].map(([name, port]) => {
+                const state =
+                  !port
+                    ? "not_checked"
+                    : port === "FIXTURE"
+                      ? "sample"
+                      : port === "ABSENT" || port === "UNSUPPORTED"
+                        ? "not_configured"
+                        : port === "ALPACA_LIVE"
+                          ? "unavailable"
+                          : port === "ALPACA" || port === "ALPACA_PAPER" || port === "PRESENT"
+                            ? "ready"
+                            : "not_checked";
+                return (
                 <tr key={name} className="h-14 border-t border-border">
                   <td>{name}</td>
-                  <td>{port === "FIXTURE" ? "Sample data" : port === "ABSENT" ? "Not configured" : "Ready"}</td>
-                  <td className="text-muted">{port === "FIXTURE" ? "Fixture session only" : String(port)}</td>
+                  <td>
+                    <Badge tone={capabilityTone(state)}>{capabilityLabel(state)}</Badge>
+                  </td>
+                  <td className="text-muted">{port === "FIXTURE" ? "Fixture session only" : port ? String(port) : "No result returned"}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -249,13 +297,20 @@ function Ops({
 
       <section id="rules" className="scroll-mt-24 flex flex-col gap-4">
         <h2 className="text-xl font-semibold">Rules & review</h2>
-        <Panel title="Current rule" aside="rule-v1">
+        <Panel title="Current rule">
           <p className="text-sm leading-relaxed">
             Predict long when issuer-confirmed after-close timing, a complete card, valid options, an options-implied
             move proxy between 4% and 15%, five-day relative return below the benchmark, and 63-day relative return
             above the benchmark. Otherwise no qualifying setup.
           </p>
-          <p className="mt-3 text-sm text-muted">The initial rule was selected after prior observation.</p>
+          <p className="mt-3 text-sm text-muted">The initial rule was selected after prior observation. Sealed decisions keep the checklist they were scored with.</p>
+          <button type="button" disabled className="mt-4 min-h-11 cursor-not-allowed rounded-sm border border-control px-4 text-sm text-muted">
+            Register future rule
+          </button>
+          <p className="mt-2 text-sm text-muted">
+            Registration stays disabled until the approved backend workflow is available. Active and sealed rules cannot
+            be edited, and historical outcomes cannot be chosen by hand.
+          </p>
         </Panel>
         <Panel title="Review note">
           {d.can_mutate ? (

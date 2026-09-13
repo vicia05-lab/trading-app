@@ -1,10 +1,10 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { FileBarChart, Home, ListChecks, Settings, SquarePen } from "lucide-react";
+import { Bell, FileBarChart, HelpCircle, Home, ListChecks, Settings, SquarePen } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { RedirectToSignIn, UserButton } from "@/lib/auth/gates";
 import { authEnabled, signOut } from "@/lib/auth/client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { fetchMe, postClaimRole } from "@/desk/server-fns";
+import { fetchMe, fetchNotices, postClaimRole } from "@/desk/server-fns";
 import { applyAppearance, readAppearance, type Appearance } from "@/ui/theme";
 import { TickerQuoteProvider } from "@/components/ticker-quote";
 export { Drawer } from "@/components/drawer";
@@ -25,6 +25,16 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [appearance, setAppearance] = useState<Appearance>("light");
   const [menuOpen, setMenuOpen] = useState(false);
   const [waited, setWaited] = useState(false);
+  const [noticesOpen, setNoticesOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [notices, setNotices] = useState<Array<{
+    id: string;
+    severity: "info" | "warn" | "danger";
+    title: string;
+    detail: string;
+    at: string;
+    href: string;
+  }>>([]);
 
   useEffect(() => {
     const pref = readAppearance();
@@ -56,6 +66,15 @@ export function AppShell({ children }: { children: ReactNode }) {
       cancelled = true;
       window.clearTimeout(fail);
     };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    void fetchNotices()
+      .then((n) => {
+        if (n && "data" in n && Array.isArray(n.data.items)) setNotices(n.data.items);
+      })
+      .catch(() => setNotices([]));
   }, [user]);
 
   useEffect(() => {
@@ -148,14 +167,48 @@ export function AppShell({ children }: { children: ReactNode }) {
             <span className="rounded-full bg-info-bg px-2.5 py-1 text-xs font-medium text-info">Simulated trades</span>
             <span className="rounded-full bg-subtle px-2.5 py-1 text-xs font-medium text-muted">Sample data</span>
           </div>
-          <div className="relative flex items-center gap-3">
+          <div className="relative flex items-center gap-1 sm:gap-3">
             <span className="hidden rounded-full bg-subtle px-2.5 py-1 text-xs font-medium text-muted sm:inline">{role}</span>
             <button
               type="button"
+              className="relative min-h-11 min-w-11 rounded-sm px-2 text-sm text-muted"
+              aria-label="Notifications"
+              aria-expanded={noticesOpen}
+              onClick={() => {
+                setNoticesOpen((v) => !v);
+                setHelpOpen(false);
+                setMenuOpen(false);
+              }}
+            >
+              <Bell className="size-5" aria-hidden />
+              {notices.length > 0 ? (
+                <span className="absolute right-1 top-2 size-2 rounded-full bg-danger" aria-hidden />
+              ) : null}
+            </button>
+            <button
+              type="button"
+              className="min-h-11 min-w-11 rounded-sm px-2 text-sm text-muted"
+              aria-label="Help"
+              aria-expanded={helpOpen}
+              onClick={() => {
+                setHelpOpen((v) => !v);
+                setNoticesOpen(false);
+                setMenuOpen(false);
+              }}
+            >
+              <HelpCircle className="size-5" aria-hidden />
+            </button>
+            <button
+              type="button"
               className="min-h-11 rounded-sm px-2 text-sm text-muted"
-              onClick={() => setMenuOpen((v) => !v)}
+              onClick={() => {
+                setMenuOpen((v) => !v);
+                setNoticesOpen(false);
+                setHelpOpen(false);
+              }}
               aria-expanded={menuOpen}
               aria-haspopup="menu"
+              aria-label="Account"
             >
               Account
             </button>
@@ -182,6 +235,49 @@ export function AppShell({ children }: { children: ReactNode }) {
                     {appearance === opt ? " · selected" : ""}
                   </button>
                 ))}
+              </div>
+            ) : null}
+            {noticesOpen ? (
+              <div
+                role="dialog"
+                aria-label="Notifications"
+                className="absolute right-0 top-12 z-40 w-[min(24rem,calc(100vw-2rem))] rounded-md border border-border bg-surface p-3 shadow-lg"
+              >
+                <p className="px-1 text-sm font-semibold">Operational notices</p>
+                {notices.length === 0 ? (
+                  <p className="mt-2 px-1 text-sm text-muted">No operational notices.</p>
+                ) : (
+                  <ul className="mt-2 grid gap-2">
+                    {notices.map((n) => (
+                      <li key={n.id} className="rounded-sm bg-subtle px-3 py-2">
+                        <p className="text-sm font-medium">{n.title}</p>
+                        <p className="mt-1 text-sm text-muted">{n.detail}</p>
+                        <p className="mt-1 font-mono text-[11px] text-muted">{n.at.slice(0, 16).replace("T", " ")}</p>
+                        <Link to="/admin" className="mt-2 inline-flex min-h-11 items-center text-sm font-medium text-info" onClick={() => setNoticesOpen(false)}>
+                          View issue
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ) : null}
+            {helpOpen ? (
+              <div
+                role="dialog"
+                aria-labelledby="about-desk-title"
+                className="absolute right-0 top-12 z-40 w-[min(24rem,calc(100vw-2rem))] rounded-md border border-border bg-surface p-4 shadow-lg"
+              >
+                <h2 id="about-desk-title" className="text-sm font-semibold">
+                  About this desk
+                </h2>
+                <p className="mt-2 text-sm text-muted">
+                  Paper-only after-close earnings research. No live orders. Saved keys stay on the server. Direction
+                  hits and paper P&L stay on Results for the reviewer role.
+                </p>
+                <button type="button" className="mt-3 min-h-11 text-sm font-medium text-info" onClick={() => setHelpOpen(false)}>
+                  Close
+                </button>
               </div>
             ) : null}
           </div>
@@ -301,7 +397,7 @@ export function SessionTabs({
 }: {
   sessions: Array<{ session_date: string }>;
   active?: string;
-  to: "/earnings" | "/predictions";
+  to: "/" | "/earnings" | "/predictions";
 }) {
   if (!sessions.length) return null;
   return (
