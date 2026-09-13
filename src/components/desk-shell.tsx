@@ -123,9 +123,9 @@ export function DeskShell({ children }: { children: ReactNode }) {
             <p className="truncate text-[11px] text-muted">
               {alpacaOn
                 ? alpacaMode === "LIVE"
-                  ? "Live Alpaca orders spend real capital · earnings desk remains paper-modeled"
-                  : "Alpaca paper venue · earnings research still fixture-modeled"
-                : "Insert keys on the Keys tab, then trade"}
+                  ? "Live Alpaca — auto-execution is off"
+                  : "Alpaca paper auto-execution · $5,000 tickets on admitted PREDICT"
+                : "Insert keys, then Trade runs the book"}
             </p>
           </div>
           <div className="flex items-center gap-3">

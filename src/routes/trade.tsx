@@ -4,10 +4,12 @@ import { DeskShell, Empty, Err, Panel, Stat } from "@/components/desk-shell";
 import {
   fetchAlpacaDesk,
   fetchAlpacaOrders,
+  fetchAutoStatus,
   postAlpacaCancel,
   postAlpacaClose,
   postAlpacaOrder,
   postAlpacaWatchlist,
+  runAutoCycle,
 } from "@/desk/server-fns";
 
 export const Route = createFileRoute("/trade")({ component: Trade });
@@ -105,10 +107,11 @@ function TradeBody({
       <div>
         <h1 className="text-xl font-medium tracking-tight">Trade</h1>
         <p className="mt-1 text-sm text-muted">
-          {live ? "Live Alpaca — orders spend real capital." : "Alpaca paper account — simulated fills, real market data."}{" "}
+          {live ? "Live Alpaca — auto-execution is off. Manual ticket only." : "Paper auto-execution is on. PREDICT names that pass admission send a $5,000 ticket."}{" "}
           Key {data.status.api_key_masked}
         </p>
       </div>
+      <AutoDeskPanel />
       {live ? (
         <div className="rounded-lg border border-danger/40 bg-sunken px-3 py-2 text-sm text-danger" role="status">
           LIVE mode. A market order is not undoable. Confirm the checkbox on the ticket before sending.
@@ -443,6 +446,102 @@ function TradeBody({
         ) : null}
       </Panel>
     </div>
+  );
+}
+
+function AutoDeskPanel() {
+  const [summary, setSummary] = useState<string | null>(null);
+  const [fills, setFills] = useState<Array<{
+    position_id: string;
+    symbol: string;
+    side: string;
+    notional: string | null;
+    status: string;
+    last_error: string | null;
+    submitted_at: string | null;
+  }>>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function refresh(run: boolean) {
+    setErr(null);
+    try {
+      const r = run ? await runAutoCycle() : await fetchAutoStatus();
+      const line = "summary" in r ? r.summary : r.last_summary;
+      setSummary(line);
+      setFills(r.fills ?? []);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Auto-desk failed");
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      setBusy(true);
+      try {
+        if (!cancelled) await refresh(true);
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    })();
+    const id = window.setInterval(() => {
+      void refresh(false);
+    }, 20000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
+
+  return (
+    <Panel title="Auto-execution" aside={busy ? "RUNNING" : "PAPER"}>
+      <p className="mb-3 text-sm leading-relaxed text-muted">
+        When a freeze is PREDICT and admission admits it, the desk sends a $5,000 paper buy on Alpaca. Exits close the
+        venue position. Live keys never auto-fire.
+      </p>
+      {err ? <Err>{err}</Err> : null}
+      {summary ? <p className="mb-3 text-sm text-muted">{summary}</p> : null}
+      <button
+        type="button"
+        disabled={busy}
+        className="mb-3 min-h-11 rounded-md bg-primary px-4 text-sm text-primary-fg disabled:opacity-40"
+        onClick={() => {
+          setBusy(true);
+          void refresh(true).finally(() => setBusy(false));
+        }}
+      >
+        {busy ? "Running…" : "Run auto-desk now"}
+      </button>
+      {fills.length === 0 ? (
+        <Empty>No automatic tickets yet. Run auto-desk after keys are in.</Empty>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[32rem] text-left text-sm">
+            <thead className="text-[11px] uppercase tracking-wider text-muted">
+              <tr>
+                <th className="pb-2 font-medium">Symbol</th>
+                <th className="pb-2 font-medium">Side</th>
+                <th className="pb-2 font-medium">Notional</th>
+                <th className="pb-2 font-medium">Status</th>
+                <th className="pb-2 font-medium">Detail</th>
+              </tr>
+            </thead>
+            <tbody className="font-mono text-xs">
+              {fills.map((f) => (
+                <tr key={f.position_id} className="border-t border-border">
+                  <td className="py-2">{f.symbol}</td>
+                  <td className="py-2">{f.side}</td>
+                  <td className="py-2">{f.notional ?? "—"}</td>
+                  <td className="py-2">{f.status}</td>
+                  <td className="py-2 text-muted">{f.last_error ?? (f.submitted_at ?? "").slice(0, 19)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Panel>
   );
 }
 

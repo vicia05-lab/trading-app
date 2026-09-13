@@ -453,7 +453,7 @@ async function nextOpen(sql: import("@/lib/db").Sql, from: string, n: number): P
 export async function freezeMember(commandId: string, manifestId: string, securityId: string, actor: string) {
   const existing = await existingReceipt(commandId);
   if (existing) return existing;
-  return withWriter(actor, async (ctx) => {
+  const result = await withWriter(actor, async (ctx) => {
     const found = await ctx.sql.query<{ freeze_id: string; input_hash: Buffer; output_hash: Buffer }>(
       `SELECT freeze_id, input_hash, output_hash FROM "freeze" WHERE manifest_id = $1 AND permanent_security_id = $2`,
       [manifestId, securityId],
@@ -621,11 +621,13 @@ export async function freezeMember(commandId: string, manifestId: string, securi
         eventSeq,
       ],
     );
+    let tickerForCommit: string | null = null;
     if (admission.outcome === "ADMITTED" && admission.position_id) {
       const ticker = await ctx.sql.query<{ display_ticker: string }>(
         `SELECT display_ticker FROM manifest_member WHERE manifest_id = $1 AND permanent_security_id = $2`,
         [manifestId, securityId],
       );
+      tickerForCommit = ticker[0]?.display_ticker ?? securityId;
       await commitPosition(ctx, {
         positionId: admission.position_id,
         freezeId,
@@ -633,7 +635,7 @@ export async function freezeMember(commandId: string, manifestId: string, securi
         securityId,
         admissionId: admId,
         sessionDate: man[0].session_date,
-        ticker: ticker[0]?.display_ticker ?? securityId,
+        ticker: tickerForCommit,
       });
     }
     return {
@@ -644,10 +646,20 @@ export async function freezeMember(commandId: string, manifestId: string, securi
       output_hash: outHash,
       admission_outcome: admission.outcome,
       position_id: admission.position_id,
+      ticker: tickerForCommit,
       reasons: ev.reasons,
       verification_level: "BYTE_VERIFIED",
     };
   });
+  if ("ticker" in result && result.admission_outcome === "ADMITTED" && result.position_id && result.ticker) {
+    try {
+      const { sendEntry } = await import("./auto-trade");
+      await sendEntry({ positionId: result.position_id, ticker: result.ticker, actor });
+    } catch {
+      /* desk commitment stands if the venue rejects */
+    }
+  }
+  return result;
 }
 
 async function verifyExistingFreeze(

@@ -194,3 +194,17 @@ export const postAlpacaClose = createServerFn({ method: "POST" })
     const { postAlpacaCloseImpl } = await import("./server-fns-impl.server");
     return postAlpacaCloseImpl(context.userId, data.symbol);
   });
+
+export const runAutoCycle = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const { runAutoCycleImpl } = await import("./server-fns-impl.server");
+    return runAutoCycleImpl(context.userId);
+  });
+
+export const fetchAutoStatus = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const { fetchAutoStatusImpl } = await import("./server-fns-impl.server");
+    return fetchAutoStatusImpl(context.userId);
+  });

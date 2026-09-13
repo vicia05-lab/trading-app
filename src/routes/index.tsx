@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { DeskShell, Empty, Err, Panel, Stat } from "@/components/desk-shell";
 import { AlpacaKeyInsert } from "@/components/alpaca-keys";
-import { fetchHome } from "@/desk/server-fns";
+import { fetchHome, runAutoCycle } from "@/desk/server-fns";
 
 export const Route = createFileRoute("/")({ component: Home });
 
@@ -33,6 +33,8 @@ function HomeLoader() {
 function HomeBody({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchHome>>, { needs_role: true }> }) {
   const d = data.data;
   const s = d.latest_session;
+  const [autoNote, setAutoNote] = useState<string | null>(null);
+  const [autoBusy, setAutoBusy] = useState(false);
   return (
     <div className="flex flex-col gap-4">
       <div>
@@ -42,6 +44,26 @@ function HomeBody({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchHome>
         </p>
       </div>
       <AlpacaKeyInsert />
+      <Panel title="Auto-execution" aside={d.alpaca?.connected ? (d.alpaca.mode === "LIVE" ? "LIVE OFF" : "PAPER ON") : "needs keys"}>
+        <p className="mb-3 text-sm text-muted">
+          Admitted PREDICT names send a $5,000 Alpaca paper ticket. This does not fire in live mode.
+        </p>
+        {autoNote ? <p className="mb-3 text-sm text-muted">{autoNote}</p> : null}
+        <button
+          type="button"
+          disabled={autoBusy || !d.alpaca?.connected}
+          className="min-h-11 rounded-md bg-primary px-4 text-sm text-primary-fg disabled:opacity-40"
+          onClick={() => {
+            setAutoBusy(true);
+            void runAutoCycle()
+              .then((r) => setAutoNote(r.summary))
+              .catch((e) => setAutoNote(e instanceof Error ? e.message : "Auto-desk failed"))
+              .finally(() => setAutoBusy(false));
+          }}
+        >
+          {autoBusy ? "Running…" : "Run auto-desk now"}
+        </button>
+      </Panel>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Panel title="Cohort">
           <Stat label="Sealed" value={s?.sealed_member_count ?? "—"} />
