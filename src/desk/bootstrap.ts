@@ -115,7 +115,15 @@ export async function ensureBootstrapped(): Promise<{ ok: boolean; note: string 
   bootChain = (async () => {
     const sql = await getSql();
     const st = await sql.query<{ completed: boolean }>(`SELECT completed FROM bootstrap_state WHERE singleton_key = TRUE`);
-    if (st[0]?.completed) return { ok: true, note: "already-seeded" };
+    if (st[0]?.completed) {
+      try {
+        const { reviseClosedManifests } = await import("./learn");
+        await reviseClosedManifests(SERVICE);
+      } catch {
+        /* observational */
+      }
+      return { ok: true, note: "already-seeded" };
+    }
     await seedWorld();
     return { ok: true, note: "seeded" };
   })()
@@ -236,7 +244,7 @@ async function seedWorld() {
        ON CONFLICT DO NOTHING`,
       [t0],
     );
-    const jobs = ["premarket-check", "capture-cycle", "seal-session", "ordered-freeze", "due-deadlines", "mark-ingest", "grade-apply", "report-finalize"];
+    const jobs = ["premarket-check", "capture-cycle", "seal-session", "ordered-freeze", "due-deadlines", "mark-ingest", "grade-apply", "report-finalize", "learn-revise"];
     for (const j of jobs) {
       await tx.query(`INSERT INTO job_state (job_name, status) VALUES ($1, 'IDLE') ON CONFLICT DO NOTHING`, [j]);
     }
@@ -569,6 +577,13 @@ async function seedWorld() {
   await applyDueDeadlines(SERVICE);
   await ensureClock(etInstant("2026-09-15", "16:00").toISOString());
   await applyDueDeadlines(SERVICE);
+
+  try {
+    const { reviseClosedManifests } = await import("./learn");
+    await reviseClosedManifests(SERVICE);
+  } catch {
+    /* first-boot learning is observational */
+  }
 
   const sql2 = await getSql();
   const hotelPos = await sql2.query<{ position_id: string }>(

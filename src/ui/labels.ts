@@ -73,6 +73,12 @@ export function reasonSentence(code: string): string {
     WIDE_SPREAD: "The quoted spread was too wide for admission.",
     PRICE_BELOW_MIN: "The price was below the admission minimum.",
     NO_QUOTE: "A usable quote was not available.",
+    PREDICATE_FALSE_implied_move: "The expected move was outside the allowed band.",
+    PREDICATE_FALSE_benchmark_relative_5d: "Five-day performance was not below the market by enough.",
+    PREDICATE_FALSE_benchmark_relative_63d: "Sixty-three-day performance was not above the market by enough.",
+    PREDICATE_FALSE_timing_quality: "Earnings timing was not issuer-confirmed after close.",
+    PREDICATE_FALSE_card_complete: "Required information was not complete.",
+    PREDICATE_FALSE_options_valid: "The options input was not usable.",
   };
   return map[code] ?? code.replaceAll("_", " ").toLowerCase();
 }
@@ -93,6 +99,7 @@ export function jobPurpose(name: string): string {
     "mark-ingest": "Process official prices",
     "grade-apply": "Prepare reports",
     "report-finalize": "Release review window",
+    "learn-revise": "Update next-session checklist",
   };
   return map[name] ?? name.replaceAll("-", " ");
 }

@@ -184,6 +184,26 @@ function HomeBody({
         </ol>
       </Panel>
 
+      {d.learning ? (
+        <Panel title={`Current checklist · ${d.learning.rule_version}`}>
+          <p className="mb-3 text-sm text-muted">
+            Used on the next lock. Decisions already recorded keep the checklist they were scored with.
+          </p>
+          <ul className="grid gap-2 text-sm">
+            {d.learning.bullets.map((b) => (
+              <li key={b} className="flex min-h-11 items-center border-b border-border pb-2">
+                {b}
+              </li>
+            ))}
+          </ul>
+          {d.learning.last ? (
+            <p className="mt-3 text-sm text-muted">{d.learning.last.reason}</p>
+          ) : (
+            <p className="mt-3 text-sm text-muted">No review has run yet. A review is written after a session’s report is released.</p>
+          )}
+        </Panel>
+      ) : null}
+
       <Panel title="Needs attention">
         {attention.length === 0 ? (
           <Empty>No grouped issues right now.</Empty>

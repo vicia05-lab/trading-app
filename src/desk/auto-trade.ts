@@ -276,6 +276,12 @@ async function liveWatchlistCycle(actor: string): Promise<{ scanned: number; adm
   const spyBars = bars.SPY ?? [];
   const spy5 = ret(spyBars, 5);
   const spy63 = ret(spyBars, 63);
+  const { loadActiveThresholds } = await import("./learn");
+  const band = await loadActiveThresholds();
+  const minMove = Number(band.implied_move_gte);
+  const maxMove = Number(band.implied_move_lte);
+  const rel5Need = Number(band.rel5_lt);
+  const rel63Need = Number(band.rel63_gt);
 
   for (const symbol of universe) {
     if (slots <= 0) break;
@@ -309,8 +315,7 @@ async function liveWatchlistCycle(actor: string): Promise<{ scanned: number; adm
     }
     const rel5 = r5 - spy5;
     const rel63 = r63 - spy63;
-    // Mirror INITIAL_AST: pullback vs benchmark, longer-term relative strength, move in band.
-    if (!(rel5 < 0 && rel63 > 0 && rng >= 0.04 && rng <= 0.25)) {
+    if (!(rel5 < rel5Need && rel63 > rel63Need && rng >= minMove && rng <= maxMove)) {
       skipped.push(`${symbol}:stand-down`);
       continue;
     }

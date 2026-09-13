@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { getSql, withTransaction } from "@/lib/db";
 import {
   COST_MODEL_CONTENT,
-  INITIAL_AST,
   KernelError,
   admitPredict,
   costModelHash,
@@ -77,7 +76,22 @@ export async function sealSession(commandId: string, sessionDate: string, actor:
       rule_version: string;
       evaluator_id: string;
       cost_model_id: string;
-    }>(`SELECT window_id, universe_version, policy_id, rule_id, rule_version, evaluator_id, cost_model_id FROM evaluation_window ORDER BY starts_at LIMIT 1`);
+    }>(`SELECT window_id, universe_version, policy_id, rule_id, rule_version, evaluator_id, cost_model_id
+        FROM evaluation_window
+        WHERE starts_at <= $1 AND ends_at > $1 AND ended_early_at IS NULL
+        ORDER BY starts_at DESC LIMIT 1`, [ctx.now.toISOString()]);
+    if (!win.length) {
+      const fallback = await ctx.sql.query<{
+        window_id: string;
+        universe_version: string;
+        policy_id: string;
+        rule_id: string;
+        rule_version: string;
+        evaluator_id: string;
+        cost_model_id: string;
+      }>(`SELECT window_id, universe_version, policy_id, rule_id, rule_version, evaluator_id, cost_model_id FROM evaluation_window ORDER BY starts_at DESC LIMIT 1`);
+      if (fallback.length) win.push(fallback[0]);
+    }
     if (!win.length) throw new DeskError("NO_WINDOW", "no evaluation window");
     const w = win[0];
     const cal = await ctx.sql.query<{ listing_exchange: string; is_open: boolean; moc_entry_cutoff_at: string; close_at: string; content_hash: Buffer }>(
@@ -516,7 +530,9 @@ export async function freezeMember(commandId: string, manifestId: string, securi
       pins: pinTuples,
     });
     const card = sealed[0].card;
-    const ev = evaluate(INITIAL_AST, {
+    const { astForManifest } = await import("./learn");
+    const ast = await astForManifest(manifestId);
+    const ev = evaluate(ast, {
       timing_quality: card.timing_quality,
       card_complete: card.card_complete,
       options_valid: card.options_valid,

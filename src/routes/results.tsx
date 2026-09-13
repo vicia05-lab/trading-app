@@ -35,7 +35,7 @@ function Loader() {
 function Body({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchResults>>, { needs_role: true }> }) {
   const d = data.data;
   const p = d.process;
-  const [tab, setTab] = useState<"process" | "review" | "book">("process");
+  const [tab, setTab] = useState<"process" | "review" | "book" | "learn">("process");
   return (
     <div className="flex flex-col gap-6">
       <PageHeader title="Results" purpose="Operational coverage and research outcomes, with missing evidence kept visible." />
@@ -51,6 +51,7 @@ function Body({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchResults>>
             ["process", "Process"],
             ["review", "Prediction review"],
             ["book", "Paper results"],
+            ["learn", "Checklist"],
           ] as const
         ).map(([k, lab]) => (
           <button
@@ -96,6 +97,70 @@ function Body({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchResults>>
           )}
         </Panel>
       ) : null}
+
+      {tab === "learn" ? (
+        <Panel title={`Checklist in force · ${d.learning?.rule_version ?? "v1"}`}>
+          <LearnBlock learning={d.learning} />
+        </Panel>
+      ) : null}
+    </div>
+  );
+}
+
+function LearnBlock({
+  learning,
+}: {
+  learning?: {
+    rule_version: string;
+    bullets: string[];
+    last: { adopted: boolean; reason: string; evidence_n: number | null; direction_hits: number | null; created_at: string } | null;
+    history: Array<{
+      adopted: boolean;
+      reason: string;
+      rule_version: string | null;
+      created_at: string;
+      evidence_n: number | null;
+      direction_hits: number | null;
+    }>;
+  };
+}) {
+  if (!learning) return <Empty>Checklist review has not run yet.</Empty>;
+  return (
+    <div className="grid gap-4">
+      <p className="text-sm text-muted">
+        The next lock uses this checklist. Decisions already recorded keep the version they were scored with.
+      </p>
+      <ul className="grid gap-2 text-sm">
+        {learning.bullets.map((b) => (
+          <li key={b} className="flex min-h-11 items-center border-b border-border pb-2">
+            {b}
+          </li>
+        ))}
+      </ul>
+      {learning.last ? (
+        <div className="rounded-sm bg-subtle px-4 py-3">
+          <p className="text-sm font-medium">{learning.last.adopted ? "Updated for the next lock" : "Reviewed · no change"}</p>
+          <p className="mt-1 text-sm text-muted">{learning.last.reason}</p>
+        </div>
+      ) : null}
+      {learning.history.length > 0 ? (
+        <div>
+          <h3 className="mb-2 text-sm font-semibold">Review history</h3>
+          <ol className="grid gap-3">
+            {learning.history.map((h, i) => (
+              <li key={`${h.created_at}-${i}`} className="border-b border-border pb-2">
+                <p className="text-sm">
+                  {h.adopted ? `Adopted ${h.rule_version ?? ""}`.trim() : "Held"}
+                  {h.evidence_n != null ? ` · ${h.direction_hits} of ${h.evidence_n} clean labels` : ""}
+                </p>
+                <p className="mt-1 text-sm text-muted">{h.reason}</p>
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : (
+        <Empty>No reviews recorded yet.</Empty>
+      )}
     </div>
   );
 }

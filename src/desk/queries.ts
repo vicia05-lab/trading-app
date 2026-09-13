@@ -114,6 +114,8 @@ export async function homePayload(role: DeskRole) {
      WHERE p.state <> 'CLOSED'
      ORDER BY p.display_ticker`,
   );
+  const { learningSummary } = await import("./learn");
+  const learning = await learningSummary(role);
   const predictCount = latest
     ? await sql.query<{ c: number }>(
         `SELECT COUNT(*)::int AS c FROM "freeze" WHERE manifest_id = $1 AND decision = 'PREDICT'`,
@@ -161,6 +163,7 @@ export async function homePayload(role: DeskRole) {
     predict_count: String(predictCount[0].c),
     open_positions: openPos,
     alpaca: await publicStatus(),
+    learning,
   });
 }
 
@@ -408,10 +411,12 @@ export async function resultsPayload(role: DeskRole) {
   const suppress = lower.value && Number(lower.value) <= 0.5 && Number(upper.value) >= 0.5;
 
   const operator = role === "OPERATOR";
+  const { learningSummary } = await import("./learn");
+  const learning = await learningSummary(role);
   return wrap("res-1", clock, {
     role,
     banner:
-      "Operational research report. Rule v1 was selected after prior observation. Small-sample hit rate does not establish a trading edge. Paper P&L is ESTIMATED under a conservative stress haircut, not live-fill evidence. Unresolved prices and excluded labels are disclosed separately.",
+      "Operational research report. The current checklist was selected after prior observation. Small-sample hit rate does not establish a trading edge. Paper P&L is ESTIMATED under a conservative stress haircut, not live-fill evidence. Unresolved prices and excluded labels are disclosed separately.",
     process: {
       sealed: String(nSealed),
       frozen: String(nFrozen),
@@ -465,6 +470,7 @@ export async function resultsPayload(role: DeskRole) {
             vintage: b.vintage == null ? null : String(b.vintage),
           })),
         },
+    learning,
   });
 }
 

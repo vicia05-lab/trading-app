@@ -544,6 +544,12 @@ export async function applyDueDeadlines(actor: string) {
         results.push({ deadline: d.deadline_id, kind: d.kind, ok: true, error: null });
       } else if (d.kind === "REPORT_FINALIZE" && d.manifest_id) {
         await applyReportFinalize(newId("cmd"), d.manifest_id, actor);
+        try {
+          const { maybeReviseRule } = await import("./learn");
+          await maybeReviseRule(d.manifest_id, actor);
+        } catch {
+          /* learning is observational; report already released */
+        }
         results.push({ deadline: d.deadline_id, kind: d.kind, ok: true, error: null });
       }
     } catch (err) {
