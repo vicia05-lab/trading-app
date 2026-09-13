@@ -2,6 +2,7 @@ import { ensureBootstrapped } from "./bootstrap";
 import { adminPayload, claimRole, earningsPayload, getOrCreatePrincipal, homePayload, noticesPayload, predictionsPayload, resultsPayload } from "./queries";
 import { pauseAdmission, resumeAdmission, recordPrintKnowledge, appendFireRateNote, applyDueDeadlines } from "./lifecycle";
 import { freezeMember } from "./commands";
+import { verifyFreezeArtifact } from "./verify-freeze";
 import { DeskError, newId } from "./util";
 import type { DeskRole } from "./util";
 import {
@@ -124,7 +125,7 @@ export async function postRetryDeadlinesImpl(userId: string) {
 
 export async function postVerifyFreezeImpl(userId: string, data: { manifestId: string; securityId: string }) {
   await roleOf(userId);
-  return freezeMember(newId("cmd"), data.manifestId, data.securityId, "svc-desk-writer");
+  return verifyFreezeArtifact(data.manifestId, data.securityId);
 }
 
 export async function fetchAlpacaStatusImpl(userId: string) {
@@ -141,22 +142,18 @@ export async function postAlpacaCredentialsImpl(
   if (data.mode === "LIVE") {
     throw new Error("This workspace is paper-only. Live Alpaca trading is not available.");
   }
-  try {
-    const saved = await saveCredentials({ ...data, mode: "PAPER", actor: principal_id });
-    try {
-      const { execute } = await import("./alpaca-data-service.server");
-      const current = await execute(userId, false, (s) => s.status(userId));
-      const expectedVersion = current.ok ? current.status.version : null;
-      await execute(userId, true, (s) =>
-        s.save(userId, { apiKeyId: data.apiKeyId, apiSecret: data.apiSecret }, expectedVersion),
-      );
-    } catch {
-      /* paper venue save is the source of truth for Trade */
-    }
-    return saved;
-  } catch (e) {
-    throw new Error(e instanceof Error ? e.message : "Could not store keys");
+  const { execute } = await import("./alpaca-data-service.server");
+  const current = await execute(userId, false, (s) => s.status(userId));
+  if (!current.ok) {
+    throw new Error("Keys were not saved. Check operator access and secret storage.");
   }
+  const stored = await execute(userId, true, (s) =>
+    s.save(userId, { apiKeyId: data.apiKeyId, apiSecret: data.apiSecret }, current.status.version),
+  );
+  if (!stored.ok) {
+    throw new Error("Keys were not saved. Check operator access and secret storage.");
+  }
+  return saveCredentials({ ...data, mode: "PAPER", actor: principal_id });
 }
 
 export async function postAlpacaDisconnectImpl(userId: string) {

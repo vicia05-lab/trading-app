@@ -52,6 +52,15 @@ test("live Alpaca host and LIVE saves are rejected in source", () => {
   const cmds = readFileSync(new URL("./commands.ts", import.meta.url), "utf8");
   assert.match(cmds, /RULE_MISMATCH/);
   assert.match(cmds, /RULE_UNAVAILABLE/);
-  assert.match(cmds, /recomputed input hash does not match the freeze artifact/);
-  assert.match(cmds, /replayed decision does not match the freeze artifact/);
+  assert.match(cmds, /verifyFreezeArtifact/);
+  const verify = readFileSync(new URL("./verify-freeze.ts", import.meta.url), "utf8");
+  assert.match(verify, /observationHash/);
+  assert.match(verify, /snapshotHash/);
+  assert.match(verify, /manifestHash/);
+  assert.match(verify, /pinned observation is missing/);
+  assert.match(verify, /stored output payload does not hash to the freeze output hash/);
+  assert.match(verify, /freeze_verify_audit/);
+  const impl = readFileSync(new URL("./server-fns-impl.server.ts", import.meta.url), "utf8");
+  assert.match(impl, /verifyFreezeArtifact/);
+  assert.doesNotMatch(impl, /freezeMember\(newId\("cmd"\)/);
 });
