@@ -52,4 +52,6 @@ test("live Alpaca host and LIVE saves are rejected in source", () => {
   const cmds = readFileSync(new URL("./commands.ts", import.meta.url), "utf8");
   assert.match(cmds, /RULE_MISMATCH/);
   assert.match(cmds, /RULE_UNAVAILABLE/);
+  assert.match(cmds, /recomputed input hash does not match the freeze artifact/);
+  assert.match(cmds, /replayed decision does not match the freeze artifact/);
 });

@@ -160,10 +160,10 @@ export function alarmLabel(code: string): { title: string; detail: string } {
         title: "New simulated positions paused",
         detail: "A reserved paper slot stays occupied until the missing official price is resolved.",
       };
-    case "PARTIAL_FREEZE_OCCURRED":
+    case "FREEZE_ARTIFACT_MISMATCH":
       return {
-        title: "Some names were not decided",
-        detail: "This session recorded decisions for only part of the sealed list.",
+        title: "Recorded decision could not be replayed",
+        detail: "The saved freeze did not match a fresh check of the sealed inputs and rule. It is not a live order.",
       };
     case "OFF_DESIGN_EARLY_RELEASE":
       return {

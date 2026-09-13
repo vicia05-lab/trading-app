@@ -550,33 +550,12 @@ export async function freezeMember(commandId: string, manifestId: string, securi
     if (ruleAstHash(ast) !== asHex(man[0].rule_ast_hash)) {
       throw new DeskError("RULE_MISMATCH", "loaded rule does not match the sealed digest", 503);
     }
-    const ev = evaluate(ast, {
-      timing_quality: card.timing_quality,
-      card_complete: card.card_complete,
-      options_valid: card.options_valid,
-      implied_move: card.implied_move,
-      benchmark_relative_5d: card.benchmark_relative_5d,
-      benchmark_relative_63d: card.benchmark_relative_63d,
-    });
+    const ev = evaluate(ast, evalCard(card));
     if (ev.status === "INVALID_RULE") {
       await raiseAlarm(ctx, "INVALID_RULE_AST", "evaluator", { securityId }, true);
       throw new DeskError("INVALID_RULE_AST", "registered rule invalid", 503);
     }
-    const band =
-      ev.decision === "PREDICT" && card.implied_move
-        ? magnitudeBand(card.implied_move)
-        : { low: null as string | null, high: null as string | null };
-    const decisionPayload = {
-      status: ev.status,
-      decision: ev.decision,
-      direction: ev.direction,
-      magnitude_low: band.low,
-      magnitude_high: band.high,
-      card_complete: card.card_complete,
-      options_valid: card.options_valid,
-      reasons: ev.reasons,
-      missing: ev.reasons.filter((r) => r.startsWith("MISSING_")),
-    };
+    const decisionPayload = freezeDecisionPayload(ev, card);
     const outHash = outputHash(inHash, decisionPayload);
     const freezeId = newId("frz");
     const { eventSeq } = await appendEvent(ctx, {
@@ -702,39 +681,141 @@ async function verifyExistingFreeze(
   securityId: string,
   row: { freeze_id: string; input_hash: Buffer; output_hash: Buffer },
 ) {
-  const sealed = await ctx.sql.query<{ observation_id: string; observation_hash: Buffer }>(
-    `SELECT observation_id, observation_hash FROM sealed_input_pin WHERE manifest_id = $1 AND permanent_security_id = $2`,
+  const man = await ctx.sql.query<{
+    manifest_hash: Buffer;
+    rule_ast_hash: Buffer;
+    evaluator_artifact_hash: Buffer;
+    cost_model_hash: Buffer;
+    rule_id: string;
+    rule_version: string;
+  }>(
+    `SELECT manifest_hash, rule_ast_hash, evaluator_artifact_hash, cost_model_hash, rule_id, rule_version
+     FROM manifest WHERE manifest_id = $1`,
+    [manifestId],
+  );
+  if (!man.length) throw new DeskError("NOT_FOUND", "manifest missing", 404);
+  const member = await ctx.sql.query<{ snapshot_hash: Buffer }>(
+    `SELECT snapshot_hash FROM manifest_member WHERE manifest_id = $1 AND permanent_security_id = $2`,
     [manifestId, securityId],
   );
-  const pins = await ctx.sql.query<{ observation_id: string; observation_hash: Buffer }>(
+  if (!member.length) throw new DeskError("NOT_FOUND", "member not sealed", 404);
+  const sealed = await ctx.sql.query<{ card: TypedCard }>(
+    `SELECT card FROM sealed_input WHERE manifest_id = $1 AND permanent_security_id = $2`,
+    [manifestId, securityId],
+  );
+  if (!sealed.length) throw new DeskError("NOT_FOUND", "sealed inputs missing", 404);
+  const sealedPins = await ctx.sql.query<{ observation_id: string; observation_hash: Buffer; pin_index: number }>(
+    `SELECT observation_id, observation_hash, pin_index FROM sealed_input_pin
+     WHERE manifest_id = $1 AND permanent_security_id = $2 ORDER BY pin_index`,
+    [manifestId, securityId],
+  );
+  const freezePins = await ctx.sql.query<{ observation_id: string; observation_hash: Buffer }>(
     `SELECT observation_id, observation_hash FROM freeze_pin WHERE freeze_id = $1`,
     [row.freeze_id],
   );
-  const a = new Set(sealed.map((p) => `${p.observation_id}:${asHex(p.observation_hash)}`));
-  const b = new Set(pins.map((p) => `${p.observation_id}:${asHex(p.observation_hash)}`));
+  const a = new Set(sealedPins.map((p) => `${p.observation_id}:${asHex(p.observation_hash)}`));
+  const b = new Set(freezePins.map((p) => `${p.observation_id}:${asHex(p.observation_hash)}`));
   if (a.size !== b.size || [...a].some((x) => !b.has(x))) {
-    await raiseAlarm(ctx, "FREEZE_ARTIFACT_MISMATCH", "freeze", { freeze_id: row.freeze_id }, true);
-    throw new DeskError("FREEZE_ARTIFACT_MISMATCH", "stored pins disagree with sealed set", 503);
+    await markUnverifiable(ctx, row.freeze_id, "stored pins disagree with sealed set");
+  }
+  for (const pin of sealedPins) {
+    const obs = await ctx.sql.query<{ observation_hash: Buffer }>(
+      `SELECT observation_hash FROM observation WHERE observation_id = $1 AND tombstoned = FALSE`,
+      [pin.observation_id],
+    );
+    if (obs.length && asHex(obs[0].observation_hash) !== asHex(pin.observation_hash)) {
+      await markUnverifiable(ctx, row.freeze_id, "observation hash does not match the sealed pin");
+    }
+  }
+  const pinTuples: [string, string][] = sealedPins.map((p) => [p.observation_id, asHex(p.observation_hash)]);
+  const inHash = inputHash({
+    manifestId,
+    securityId,
+    manifestHash: asHex(man[0].manifest_hash),
+    snapshotHash: asHex(member[0].snapshot_hash),
+    ruleHash: asHex(man[0].rule_ast_hash),
+    engineHash: asHex(man[0].evaluator_artifact_hash),
+    costHash: asHex(man[0].cost_model_hash),
+    margin: MARGIN,
+    pins: pinTuples,
+  });
+  if (inHash !== asHex(row.input_hash)) {
+    await markUnverifiable(ctx, row.freeze_id, "recomputed input hash does not match the freeze artifact");
+  }
+  const ruleRows = await ctx.sql.query<{ ast_content: unknown }>(
+    `SELECT ast_content FROM rule_card WHERE rule_id = $1 AND rule_version = $2`,
+    [man[0].rule_id, man[0].rule_version],
+  );
+  const ast = ruleRows[0]?.ast_content;
+  if (ast == null) throw new DeskError("RULE_UNAVAILABLE", "sealed rule is missing", 503);
+  if (ruleAstHash(ast) !== asHex(man[0].rule_ast_hash)) {
+    throw new DeskError("RULE_MISMATCH", "loaded rule does not match the sealed digest", 503);
+  }
+  const card = sealed[0].card;
+  const ev = evaluate(ast, evalCard(card));
+  if (ev.status === "INVALID_RULE") {
+    await raiseAlarm(ctx, "INVALID_RULE_AST", "evaluator", { securityId }, true);
+    throw new DeskError("INVALID_RULE_AST", "registered rule invalid", 503);
+  }
+  const decisionPayload = freezeDecisionPayload(ev, card);
+  const outHash = outputHash(inHash, decisionPayload);
+  const fr = await ctx.sql.query<{ decision: string; direction: string | null; output_hash: Buffer }>(
+    `SELECT decision, direction, output_hash FROM "freeze" WHERE freeze_id = $1`,
+    [row.freeze_id],
+  );
+  if (!fr.length) throw new DeskError("NOT_FOUND", "freeze missing", 404);
+  if (fr[0].decision !== ev.decision || (fr[0].direction ?? null) !== (ev.direction ?? null) || asHex(fr[0].output_hash) !== outHash) {
+    await markUnverifiable(ctx, row.freeze_id, "replayed decision does not match the freeze artifact");
   }
   const adm = await ctx.sql.query<{ outcome: string; position_id: string | null }>(
     `SELECT outcome, position_id FROM execution_admission WHERE freeze_id = $1`,
     [row.freeze_id],
   );
-  const fr = await ctx.sql.query<{ decision: string; direction: string | null }>(
-    `SELECT decision, direction FROM "freeze" WHERE freeze_id = $1`,
-    [row.freeze_id],
-  );
   return {
     freeze_id: row.freeze_id,
-    decision: fr[0]?.decision,
-    direction: fr[0]?.direction ?? null,
-    input_hash: asHex(row.input_hash),
-    output_hash: asHex(row.output_hash),
+    decision: ev.decision,
+    direction: ev.direction ?? null,
+    input_hash: inHash,
+    output_hash: outHash,
     admission_outcome: adm[0]?.outcome ?? null,
     position_id: adm[0]?.position_id ?? null,
     duplicate: true,
-    verification_level: "BYTE_VERIFIED",
+    verification_level: "BYTE_VERIFIED" as const,
   };
+}
+
+function evalCard(card: TypedCard) {
+  return {
+    timing_quality: card.timing_quality,
+    card_complete: card.card_complete,
+    options_valid: card.options_valid,
+    implied_move: card.implied_move,
+    benchmark_relative_5d: card.benchmark_relative_5d,
+    benchmark_relative_63d: card.benchmark_relative_63d,
+  };
+}
+
+function freezeDecisionPayload(ev: { status: string; decision: string; direction: string | null; reasons: string[] }, card: TypedCard) {
+  const band =
+    ev.decision === "PREDICT" && card.implied_move
+      ? magnitudeBand(card.implied_move)
+      : { low: null as string | null, high: null as string | null };
+  return {
+    status: ev.status,
+    decision: ev.decision,
+    direction: ev.direction,
+    magnitude_low: band.low,
+    magnitude_high: band.high,
+    card_complete: card.card_complete,
+    options_valid: card.options_valid,
+    reasons: ev.reasons,
+    missing: ev.reasons.filter((r) => r.startsWith("MISSING_")),
+  };
+}
+
+async function markUnverifiable(ctx: WriterCtx, freezeId: string, detail: string): Promise<never> {
+  await raiseAlarm(ctx, "FREEZE_ARTIFACT_MISMATCH", "freeze", { freeze_id: freezeId, detail }, true);
+  throw new DeskError("FREEZE_ARTIFACT_MISMATCH", detail, 503);
 }
 
 async function evaluateAdmission(
