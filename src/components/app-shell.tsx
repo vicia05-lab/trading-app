@@ -24,6 +24,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [err, setErr] = useState<string | null>(null);
   const [appearance, setAppearance] = useState<Appearance>("light");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [waited, setWaited] = useState(false);
 
   useEffect(() => {
     const pref = readAppearance();
@@ -33,25 +34,46 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!user) return;
+    let cancelled = false;
+    const fail = window.setTimeout(() => {
+      if (!cancelled) setErr("This is taking too long. Try again, or sign in once more.");
+    }, 12000);
     void fetchMe()
       .then(async (m) => {
+        if (cancelled) return;
         if (!m.role) {
           const r = await postClaimRole({ data: { role: "OPERATOR" } });
-          setRole(r.role);
+          if (!cancelled) setRole(r.role);
         } else {
           setRole(m.role);
         }
       })
-      .catch((e) => setErr(e instanceof Error ? e.message : "We could not load your workspace access"));
+      .catch((e) => {
+        if (!cancelled) setErr(e instanceof Error ? e.message : "We could not load your workspace access");
+      })
+      .finally(() => window.clearTimeout(fail));
+    return () => {
+      cancelled = true;
+      window.clearTimeout(fail);
+    };
   }, [user]);
 
-  if (isPending) {
+  useEffect(() => {
+    const id = window.setTimeout(() => setWaited(true), 4000);
+    return () => window.clearTimeout(id);
+  }, []);
+
+  if (isPending && !waited) {
     return (
-      <div className="flex min-h-dvh items-center justify-center bg-canvas text-muted">
-        <p className="text-base">Loading workspace access…</p>
+      <div className="flex min-h-dvh flex-col items-center justify-center gap-3 bg-canvas px-4 text-center">
+        <p className="text-base text-muted">Loading workspace access…</p>
+        <a href="/login" className="min-h-11 text-sm font-medium text-info">
+          Continue to sign in
+        </a>
       </div>
     );
   }
+  if (isPending && waited) return <RedirectToSignIn />;
   if (!user) return <RedirectToSignIn />;
 
   if (err && role === undefined) {

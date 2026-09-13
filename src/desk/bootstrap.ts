@@ -116,12 +116,11 @@ export async function ensureBootstrapped(): Promise<{ ok: boolean; note: string 
     const sql = await getSql();
     const st = await sql.query<{ completed: boolean }>(`SELECT completed FROM bootstrap_state WHERE singleton_key = TRUE`);
     if (st[0]?.completed) {
-      try {
-        const { reviseClosedManifests } = await import("./learn");
-        await reviseClosedManifests(SERVICE);
-      } catch {
-        /* observational */
-      }
+      void import("./learn")
+        .then((m) => m.reviseClosedManifests(SERVICE))
+        .catch(() => {
+          /* observational — do not block sign-in or home */
+        });
       return { ok: true, note: "already-seeded" };
     }
     await seedWorld();
