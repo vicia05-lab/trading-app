@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { AppShell, Badge, Empty, Err, PageHeader, Panel } from "@/components/app-shell";
 import { AlpacaDataSecrets } from "@/components/alpaca-data-secrets";
 import { fetchAdmin, postFireNote, postPause, postPrintKnowledge, postResume, postRetryDeadlines } from "@/desk/server-fns";
-import { jobPurpose } from "@/ui/labels";
+import { alarmLabel, jobPurpose } from "@/ui/labels";
 
 export const Route = createFileRoute("/admin")({
   head: () => ({ meta: [{ title: "Admin | Trading App" }] }),
@@ -230,12 +230,18 @@ function Ops({
             <Empty>No unresolved alarms.</Empty>
           ) : (
             <ul className="grid gap-2">
-              {d.alarms.map((a, i) => (
-                <li key={a.code + i} className="rounded-sm bg-danger-bg px-3 py-2 text-sm text-danger">
-                  {a.code} · {a.component}
-                  {a.blocks_new_admission ? " · New paper entries are disabled while this record is checked." : ""}
-                </li>
-              ))}
+              {d.alarms.map((a, i) => {
+                const copy = alarmLabel(a.code);
+                return (
+                  <li key={a.code + i} className="rounded-sm bg-danger-bg px-3 py-2 text-sm text-danger">
+                    <p className="font-medium">{copy.title}</p>
+                    <p className="mt-0.5 text-danger/80">{copy.detail}</p>
+                    {a.blocks_new_admission ? (
+                      <p className="mt-1 text-danger/80">New paper entries are disabled while this record is checked.</p>
+                    ) : null}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </Panel>

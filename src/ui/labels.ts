@@ -140,3 +140,33 @@ export function verificationLabel(level: string | null | undefined): string {
       return "Verification unavailable";
   }
 }
+
+export function alarmLabel(code: string): { title: string; detail: string } {
+  switch (code) {
+    case "EXIT_EVIDENCE_UNRESOLVED":
+      return {
+        title: "Exit price not available",
+        detail: "A simulated position is waiting for an official close. It is not a live order.",
+      };
+    case "DESK_CAPACITY_BLOCKED_ON_MARKS":
+      return {
+        title: "New simulated positions paused",
+        detail: "A reserved paper slot stays occupied until the missing official price is resolved.",
+      };
+    case "PARTIAL_FREEZE_OCCURRED":
+      return {
+        title: "Some names were not decided",
+        detail: "This session recorded decisions for only part of the sealed list.",
+      };
+    case "OFF_DESIGN_EARLY_RELEASE":
+      return {
+        title: "Early result knowledge recorded",
+        detail: "New simulated entries stay paused until this review record is closed.",
+      };
+    default:
+      return {
+        title: "Needs review",
+        detail: "The desk recorded an open issue. It does not place a live order.",
+      };
+  }
+}
