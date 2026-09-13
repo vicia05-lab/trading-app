@@ -103,7 +103,7 @@ export function AlpacaDataSecrets({ transport = api }: { transport?: AlpacaSecre
         <Row label="Secure storage" value={storageReady ? "Ready" : "Not ready"} hint={status?.storage_code ? messages[status.storage_code] : "Server can persist encrypted credentials."} />
         <Row label="Saved keys" value={saved ? "Saved" : "Not saved"} hint={saved ? `••••${status?.key_last4 ?? ""}` : "No encrypted pair for this account."} />
         <Row label="Market-data check" value={tested ? "Checked" : saved ? "Saved / not tested" : "Not available"} hint={status?.checked_at ?? "This checks one market-data endpoint only."} />
-        <Row label="Scheduled data usage" value="Not configured" hint="Keys are saved. Scheduled market-data ingestion is not active yet." />
+        <Row label="Scheduled data usage" value="Not configured" hint={saved ? "Keys are saved. Scheduled market-data ingestion is not active yet." : "Saving keys does not start a market-data schedule."} />
       </dl>
 
       <div className="flex flex-wrap gap-2">
