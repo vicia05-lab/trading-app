@@ -1,11 +1,9 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { masterKeyFromBase64 } from "./alpaca-data-secrets";
+import { SecretError } from "./alpaca-data-secrets";
 
 const FILE = join(process.cwd(), ".grok", "alpaca-master.key");
-const TMP = join("/tmp", "trading-app-alpaca-master.key");
-let memory: Buffer | null = null;
 
 function parse(value: string): Buffer | null {
   try {
@@ -23,32 +21,35 @@ function readFile(path: string): Buffer | null {
   }
 }
 
-function writeFile(path: string, value: string): boolean {
+/**
+ * Server-only wrap key. Fail closed.
+ * Env `ALPACA_CREDENTIALS_MASTER_KEY` wins. Else an already-provisioned
+ * gitignored file. Never create /tmp or process-memory keys.
+ */
+export function loadMasterKey(): Buffer {
+  const fromEnv = process.env.ALPACA_CREDENTIALS_MASTER_KEY?.trim();
+  if (fromEnv) {
+    const parsed = parse(fromEnv);
+    if (!parsed) throw new SecretError("SECRET_STORAGE_NOT_READY");
+    return parsed;
+  }
+  const fromFile = readFile(FILE);
+  if (fromFile) return fromFile;
+  throw new SecretError("SECRET_STORAGE_NOT_READY");
+}
+
+/** True when a stable server-managed key is available. Does not create one. */
+export function masterKeyConfigured(): boolean {
   try {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, `${value}\n`, { mode: 0o600 });
+    const key = loadMasterKey();
+    key.fill(0);
     return true;
   } catch {
     return false;
   }
 }
 
-/**
- * Server-only wrap key. Env wins. Otherwise a gitignored file is created once.
- * Never put this in VITE_ or a client bundle.
- */
+/** @deprecated use loadMasterKey — creation fallbacks are removed. */
 export function loadOrCreateMasterKey(): Buffer {
-  const fromEnv = process.env.ALPACA_CREDENTIALS_MASTER_KEY?.trim();
-  if (fromEnv) {
-    const parsed = parse(fromEnv);
-    if (parsed) return parsed;
-  }
-  const fromFile = readFile(FILE) ?? readFile(TMP);
-  if (fromFile) return fromFile;
-  if (memory) return Buffer.from(memory);
-  const value = randomBytes(32).toString("base64");
-  const key = masterKeyFromBase64(value);
-  writeFile(FILE, value) || writeFile(TMP, value);
-  memory = Buffer.from(key);
-  return key;
+  return loadMasterKey();
 }

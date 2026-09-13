@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { getSql } from "@/lib/db";
 import { DeskError, newId } from "./util";
@@ -16,7 +17,10 @@ type StoredCred = {
 };
 
 function tradingHost(mode: AlpacaMode): string {
-  return mode === "LIVE" ? "https://api.alpaca.markets" : "https://paper-api.alpaca.markets";
+  if (mode === "LIVE") {
+    throw new DeskError("LIVE_DISABLED", "This workspace is paper-only. Live Alpaca orders are not available.", 422);
+  }
+  return "https://paper-api.alpaca.markets";
 }
 
 function asBuf(v: unknown): Buffer {
@@ -251,11 +255,15 @@ async function loadStored(): Promise<StoredCred> {
 }
 
 type Creds = StoredCred;
-let credOverride: Creds | null = null;
+const credStore = new AsyncLocalStorage<Creds>();
 
 async function resolveCreds(userId?: string): Promise<Creds> {
   try {
-    return await loadStored();
+    const stored = await loadStored();
+    if (stored.mode === "LIVE") {
+      throw new DeskError("LIVE_DISABLED", "This workspace is paper-only. Live Alpaca orders are not available.", 422);
+    }
+    return stored;
   } catch (first) {
     if (userId) {
       try {
@@ -273,19 +281,19 @@ async function resolveCreds(userId?: string): Promise<Creds> {
 }
 
 async function withCreds<T>(creds: Creds, fn: () => Promise<T>): Promise<T> {
-  const prev = credOverride;
-  credOverride = creds;
-  try {
-    return await fn();
-  } finally {
-    credOverride = prev;
+  if (creds.mode === "LIVE") {
+    throw new DeskError("LIVE_DISABLED", "This workspace is paper-only. Live Alpaca orders are not available.", 422);
   }
+  return credStore.run(creds, fn);
 }
 
 type AlpacaJson = Record<string, unknown> | unknown[];
 
 async function alpacaFetch(path: string, init: RequestInit & { host?: "trade" | "data" } = {}): Promise<AlpacaJson> {
-  const creds = credOverride ?? (await loadStored());
+  const creds = credStore.getStore() ?? (await loadStored());
+  if (creds.mode === "LIVE") {
+    throw new DeskError("LIVE_DISABLED", "This workspace is paper-only. Live Alpaca orders are not available.", 422);
+  }
   const host = init.host === "data" ? "https://data.alpaca.markets" : tradingHost(creds.mode);
   const headers = new Headers(init.headers);
   headers.set("APCA-API-KEY-ID", creds.api_key_id);
@@ -358,8 +366,8 @@ export async function saveCredentials(args: {
   if (apiKeyId.length < 8 || apiSecret.length < 8) {
     throw new DeskError("INVALID_KEYS", "Key id and secret must be at least 8 characters", 422);
   }
-  if (args.mode === "LIVE" && args.confirmLive !== true) {
-    throw new DeskError("LIVE_NOT_CONFIRMED", "Live mode requires the explicit confirmation checkbox", 422);
+  if (args.mode === "LIVE") {
+    throw new DeskError("LIVE_DISABLED", "This workspace is paper-only. Live Alpaca trading is not available.", 422);
   }
   const key = await wrapKey();
   const enc = encryptSecret(key, apiSecret);
@@ -832,8 +840,8 @@ export async function submitOrder(args: {
   actor: string;
 }): Promise<Record<string, string | boolean | null>> {
   const creds = await loadStored();
-  if (creds.mode === "LIVE" && args.confirmLive !== true) {
-    throw new DeskError("LIVE_NOT_CONFIRMED", "Live orders require the explicit confirmation checkbox", 422);
+  if (creds.mode === "LIVE") {
+    throw new DeskError("LIVE_DISABLED", "This workspace is paper-only. Live Alpaca orders are not available.", 422);
   }
   const symbol = normalizeSymbol(args.symbol);
   const qty = args.qty?.trim() || undefined;

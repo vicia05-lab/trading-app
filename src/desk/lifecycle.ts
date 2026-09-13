@@ -124,11 +124,12 @@ async function officialMark(
   );
   if (!rows.length) return null;
   const p = rows[0].envelope?.payload ?? {};
-  const state = String(p.state ?? "OFFICIAL");
-  if (state !== "OFFICIAL" && state !== "OFFICIAL_CORRECTED") return null;
-  const price = String(p.price ?? "");
+  const stateRaw = p.state;
+  if (typeof stateRaw !== "string") return null;
+  if (stateRaw !== "OFFICIAL" && stateRaw !== "OFFICIAL_CORRECTED") return null;
+  const price = typeof p.price === "string" ? p.price : "";
   if (!price) return null;
-  return { observation_id: rows[0].observation_id, price, hash: asHex(rows[0].observation_hash), state, session };
+  return { observation_id: rows[0].observation_id, price, hash: asHex(rows[0].observation_hash), state: stateRaw, session };
 }
 
 export async function adjudicateMember(commandId: string, manifestId: string, securityId: string, actor: string) {

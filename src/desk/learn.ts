@@ -96,7 +96,10 @@ export async function astForManifest(manifestId: string): Promise<unknown> {
      WHERE m.manifest_id = $1`,
     [manifestId],
   );
-  return rows[0]?.ast_content ?? INITIAL_AST;
+  if (!rows[0]?.ast_content) {
+    throw new Error("RULE_UNAVAILABLE");
+  }
+  return rows[0].ast_content;
 }
 
 export async function maybeReviseRule(manifestId: string, actor: string): Promise<RuleRevisionRow | null> {

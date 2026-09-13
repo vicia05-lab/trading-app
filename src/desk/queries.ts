@@ -3,6 +3,7 @@ import { asHex, rfc3339, type DeskRole } from "./util";
 import { ensureBootstrapped } from "./bootstrap";
 import { publicStatus } from "./alpaca";
 import { cap, type Capability } from "@/ui/capability";
+import { masterKeyConfigured } from "./alpaca-master-key.server";
 
 export type Envelope<T> = {
   product_name: "Trading App";
@@ -546,11 +547,21 @@ export async function adminPayload(role: DeskRole) {
     cap({
       id: "secret_storage",
       label: "Secret storage",
-      state: alpaca.connected ? "ready" : "not_configured",
-      last_checked: alpaca.last_ok_at ?? null,
-      reason: alpaca.connected
-        ? "A saved key record exists for this account."
-        : "No trading keys are saved. Missing storage is not treated as ready.",
+      state: !masterKeyConfigured()
+        ? "unavailable"
+        : dbSource !== "neon"
+          ? "sample"
+          : alpaca.connected
+            ? "ready"
+            : "not_configured",
+      last_checked: checked,
+      reason: !masterKeyConfigured()
+        ? "No server-managed wrap key is configured. Keys cannot be saved."
+        : dbSource !== "neon"
+          ? "This preview database is not a durable production store. Secret storage is not ready."
+          : alpaca.connected
+            ? "A saved key record exists for this account."
+            : "Wrap key is present. No trading keys are saved yet.",
     }),
     cap({
       id: "alpaca_test",

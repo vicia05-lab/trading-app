@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { getSql, withTransaction } from "@/lib/db";
 import {
   COST_MODEL_CONTENT,
@@ -13,6 +13,7 @@ import {
   modeledFill,
   outputHash,
   paperPnl,
+  ruleAstHash,
   snapshotHash,
   shuffle,
   directionHit,
@@ -152,7 +153,14 @@ export async function sealSession(commandId: string, sessionDate: string, actor:
        FROM observation WHERE tombstoned = FALSE`,
     );
     const manifestId = newId("man");
-    const seed = Buffer.from(sessionDate === "2026-09-04" ? "01".repeat(32) : "a5".repeat(32), "hex");
+    const seed = Buffer.from(
+      sessionDate === "2026-09-04"
+        ? "01".repeat(32)
+        : sessionDate === "2026-09-11"
+          ? "a5".repeat(32)
+          : randomBytes(32).toString("hex"),
+      "hex",
+    );
     const included: typeof members = [];
     const exclusions: Array<{ security: string; status: string; reasons: string[] }> = [];
     for (const m of members) {
@@ -483,8 +491,11 @@ export async function freezeMember(commandId: string, manifestId: string, securi
       evaluator_artifact_hash: Buffer;
       cost_model_hash: Buffer;
       session_date: string;
+      rule_id: string;
+      rule_version: string;
     }>(
-      `SELECT freeze_cutoff_at::text, freeze_resolution, manifest_hash, rule_ast_hash, evaluator_artifact_hash, cost_model_hash, session_date::text
+      `SELECT freeze_cutoff_at::text, freeze_resolution, manifest_hash, rule_ast_hash, evaluator_artifact_hash,
+              cost_model_hash, session_date::text, rule_id, rule_version
        FROM manifest WHERE manifest_id = $1 FOR UPDATE`,
       [manifestId],
     );
@@ -530,8 +541,15 @@ export async function freezeMember(commandId: string, manifestId: string, securi
       pins: pinTuples,
     });
     const card = sealed[0].card;
-    const { astForManifest } = await import("./learn");
-    const ast = await astForManifest(manifestId);
+    const ruleRows = await ctx.sql.query<{ ast_content: unknown }>(
+      `SELECT ast_content FROM rule_card WHERE rule_id = $1 AND rule_version = $2`,
+      [man[0].rule_id, man[0].rule_version],
+    );
+    const ast = ruleRows[0]?.ast_content;
+    if (ast == null) throw new DeskError("RULE_UNAVAILABLE", "sealed rule is missing", 503);
+    if (ruleAstHash(ast) !== asHex(man[0].rule_ast_hash)) {
+      throw new DeskError("RULE_MISMATCH", "loaded rule does not match the sealed digest", 503);
+    }
     const ev = evaluate(ast, {
       timing_quality: card.timing_quality,
       card_complete: card.card_complete,

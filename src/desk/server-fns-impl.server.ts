@@ -21,12 +21,8 @@ import {
 } from "./alpaca";
 
 export async function identityOf(userId: string): Promise<{ role: DeskRole; principal_id: string }> {
-  let p = await getOrCreatePrincipal(userId, null);
-  if (!p.role) {
-    await claimRole(userId, null, "OPERATOR");
-    p = await getOrCreatePrincipal(userId, null);
-  }
-  if (!p.role) throw new DeskError("FORBIDDEN", "Could not assign operator", 403);
+  const p = await getOrCreatePrincipal(userId, null);
+  if (!p.role) throw new DeskError("FORBIDDEN", "Choose operator or reviewer first", 403);
   return { role: p.role, principal_id: p.principal_id };
 }
 
@@ -36,7 +32,8 @@ async function roleOf(userId: string) {
   } catch {
     /* earnings fixtures can fail independently of Alpaca keys */
   }
-  return identityOf(userId);
+  const p = await getOrCreatePrincipal(userId, null);
+  return { role: p.role, principal_id: p.principal_id };
 }
 
 function requireOperator(role: DeskRole | null): void {
@@ -44,7 +41,7 @@ function requireOperator(role: DeskRole | null): void {
 }
 
 export async function fetchMeImpl(userId: string) {
-  const p = await identityOf(userId);
+  const p = await getOrCreatePrincipal(userId, null);
   let alpaca = { connected: false, mode: null as "PAPER" | "LIVE" | null };
   try {
     const s = await publicStatus();
@@ -131,24 +128,21 @@ export async function postVerifyFreezeImpl(userId: string, data: { manifestId: s
 }
 
 export async function fetchAlpacaStatusImpl(userId: string) {
-  const { role } = await identityOf(userId);
-  return { role, can_mutate: true as const, status: await publicStatus() };
+  const { role } = await roleOf(userId);
+  return { role, can_mutate: role === "OPERATOR", status: await publicStatus() };
 }
 
 export async function postAlpacaCredentialsImpl(
   userId: string,
   data: { apiKeyId: string; apiSecret: string; mode: "PAPER" | "LIVE"; confirmLive?: boolean },
 ) {
+  const { role, principal_id } = await roleOf(userId);
+  requireOperator(role);
+  if (data.mode === "LIVE") {
+    throw new Error("This workspace is paper-only. Live Alpaca trading is not available.");
+  }
   try {
-    const { role, principal_id } = await identityOf(userId);
-    if (role !== "OPERATOR") {
-      try {
-        await claimRole(userId, null, "OPERATOR");
-      } catch {
-        /* already assigned; still store keys for this signed-in user */
-      }
-    }
-    const saved = await saveCredentials({ ...data, actor: principal_id });
+    const saved = await saveCredentials({ ...data, mode: "PAPER", actor: principal_id });
     try {
       const { execute } = await import("./alpaca-data-service.server");
       const current = await execute(userId, false, (s) => s.status(userId));
@@ -166,7 +160,8 @@ export async function postAlpacaCredentialsImpl(
 }
 
 export async function postAlpacaDisconnectImpl(userId: string) {
-  await identityOf(userId);
+  const { role } = await identityOf(userId);
+  requireOperator(role);
   return disconnect();
 }
 
@@ -179,7 +174,7 @@ export async function postAlpacaWatchlistImpl(userId: string, watchlist: string[
 export async function fetchAlpacaDeskImpl(userId: string) {
   const { role } = await identityOf(userId);
   const status = await publicStatus();
-  const can_mutate = true;
+  const can_mutate = role === "OPERATOR";
   if (!status.connected) {
     return { role, can_mutate, status, connected: false as const };
   }

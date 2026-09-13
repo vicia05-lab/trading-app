@@ -38,3 +38,18 @@ test("operator barrier copy is not a time gate", () => {
   assert.doesNotMatch(src, /until window release/);
   assert.match(src, /information barrier/);
 });
+
+test("live Alpaca host and LIVE saves are rejected in source", () => {
+  const alpaca = readFileSync(new URL("./alpaca.ts", import.meta.url), "utf8");
+  assert.match(alpaca, /LIVE_DISABLED/);
+  assert.doesNotMatch(alpaca, /https:\/\/api\.alpaca\.markets/);
+  assert.match(alpaca, /AsyncLocalStorage/);
+  const wrap = readFileSync(new URL("./alpaca-data-service.server.ts", import.meta.url), "utf8");
+  assert.match(wrap, /canManage/);
+  assert.doesNotMatch(wrap, /durableStorage: true/);
+  const keys = readFileSync(new URL("./alpaca-master-key.server.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(keys, /trading-app-alpaca-master\.key/);
+  const cmds = readFileSync(new URL("./commands.ts", import.meta.url), "utf8");
+  assert.match(cmds, /RULE_MISMATCH/);
+  assert.match(cmds, /RULE_UNAVAILABLE/);
+});

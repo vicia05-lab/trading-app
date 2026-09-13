@@ -1,8 +1,8 @@
-import { getSql } from "@/lib/db";
+import { getSql, dbSource } from "@/lib/db";
 import { createSecretService, SecretError } from "./alpaca-data-secrets";
 import type { SecretCode, SecretStatus, SecretSql } from "./alpaca-data-secrets";
 import { decryptPair } from "./alpaca-data-secrets";
-import { loadOrCreateMasterKey } from "./alpaca-master-key.server";
+import { loadMasterKey } from "./alpaca-master-key.server";
 
 export type SecretReply =
   | { ok: true; can_manage: boolean; status: SecretStatus }
@@ -46,12 +46,16 @@ export async function execute(
     if (!userId) throw new SecretError("FORBIDDEN");
     const db = await getSql();
     await ensureSchema(db);
+    const principals = await db.query<{ role: string }>(`SELECT role FROM desk_principal WHERE user_id = $1`, [userId]);
+    const canManage = principals[0]?.role === "OPERATOR";
+    if (mutation && !canManage) throw new SecretError("FORBIDDEN");
+    const durableStorage = dbSource === "neon";
     const service = createSecretService({
       db,
-      durableStorage: true,
-      masterKey: () => loadOrCreateMasterKey(),
+      durableStorage,
+      masterKey: () => loadMasterKey(),
     });
-    return { ok: true, can_manage: true, status: await action(service) };
+    return { ok: true, can_manage: canManage && durableStorage, status: await action(service) };
   } catch (error) {
     return { ok: false, code: error instanceof SecretError ? error.code : "STORAGE_UNAVAILABLE" };
   }
@@ -67,7 +71,7 @@ export async function loadDataPair(userId: string): Promise<{ apiKeyId: string; 
     [userId],
   );
   if (!rows.length) return null;
-  const key = loadOrCreateMasterKey();
+  const key = loadMasterKey();
   try {
     return decryptPair(key, userId, rows[0].version, rows[0].envelope as Parameters<typeof decryptPair>[3]);
   } finally {
