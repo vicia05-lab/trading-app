@@ -102,8 +102,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                 to={n.to}
                 aria-current={active ? "page" : undefined}
                 className={
-                  "flex min-h-11 items-center gap-3 rounded-sm px-3 text-sm " +
-                  (active ? "bg-white/10 text-info" : "text-nav-text hover:bg-white/5")
+                  "flex min-h-11 items-center gap-3 rounded-sm border-l-2 px-3 text-sm " +
+                  (active ? "border-info bg-white/10 text-info" : "border-transparent text-nav-text hover:bg-white/5")
                 }
               >
                 <Icon className="size-5" aria-hidden />
@@ -305,6 +305,42 @@ export function PageHeader({ title, purpose, action }: { title: string; purpose:
         <p className="mt-1 text-base text-muted">{purpose}</p>
       </div>
       {action}
+    </div>
+  );
+}
+
+export function Drawer({
+  title,
+  kicker,
+  onClose,
+  children,
+}: {
+  title: string;
+  kicker?: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-40 flex justify-end bg-nav/40" role="dialog" aria-modal="true">
+      <div className="flex h-full w-full max-w-[560px] flex-col overflow-y-auto bg-surface p-4 shadow-lg md:p-6">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            {kicker ? <p className="text-sm text-muted">{kicker}</p> : null}
+            <h2 className="text-xl font-semibold leading-7">{title}</h2>
+          </div>
+          <button type="button" className="min-h-11 rounded-sm border border-control px-3 text-sm" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <div className="mt-4 flex-1">{children}</div>
+      </div>
     </div>
   );
 }

@@ -38,7 +38,12 @@ function Body({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchResults>>
   return (
     <div className="flex flex-col gap-6">
       <PageHeader title="Results" purpose="Operational coverage and research outcomes, with missing evidence kept visible." />
-      <div className="rounded-md border-l-4 border-info bg-info-bg px-4 py-3 text-sm leading-relaxed">{d.banner}</div>
+      <div className="rounded-md border-l-4 border-info bg-info-bg px-4 py-3 text-sm leading-relaxed">
+        Operational research report. The initial rule was selected after prior observation. Small-sample hit rate does
+        not establish a trading edge. Paper P&L is ESTIMATED under a conservative stress haircut, not live-fill
+        evidence. Unresolved prices and excluded labels are disclosed separately.
+      </div>
+      {d.banner ? <p className="text-sm text-muted">{d.banner}</p> : null}
       <div className="flex flex-wrap gap-2">
         {(
           [
@@ -118,11 +123,9 @@ function Research({
           value={`${r.attrition_lower.value ?? "—"} – ${r.attrition_upper.value ?? "—"}`}
           hint="This is a sensitivity range, not a confidence interval."
         />
-        <Stat
-          label="Point estimate"
-          value={r.point_estimate_suppressed ? "Not shown" : (r.hit_rate?.value ?? r.hit_rate?.reason ?? "—")}
-          hint={r.point_estimate_suppressed ? "Suppressed because the interval includes 50%." : undefined}
-        />
+        {r.point_estimate_suppressed ? null : (
+          <Stat label="Directional rate on usable labels" value={r.hit_rate?.value ?? r.hit_rate?.reason ?? "—"} />
+        )}
       </div>
       <div className="mt-6 overflow-x-auto">
         <table className="w-full min-w-[36rem] text-left text-sm">

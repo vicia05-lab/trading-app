@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { AppShell, Badge, Empty, Err, PageHeader, Panel, SessionTabs } from "@/components/app-shell";
+import { AppShell, Badge, Drawer, Empty, Err, PageHeader, Panel, SessionTabs } from "@/components/app-shell";
 import { fetchEarnings } from "@/desk/server-fns";
 import { decisionLabel, infoStatus, pct, timingLabel } from "@/ui/labels";
 
@@ -39,7 +39,7 @@ function Loader({ session }: { session?: string }) {
 function Body({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchEarnings>>, { needs_role: true }> }) {
   const d = data.data;
   const [q, setQ] = useState("");
-  const [tab, setTab] = useState<"list" | "excluded">("list");
+  const [tab, setTab] = useState<"list" | "excluded" | "awaiting">("list");
   const [detail, setDetail] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
@@ -70,6 +70,13 @@ function Body({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchEarnings>
         >
           Excluded ({d.exclusions.length})
         </button>
+        <button
+          type="button"
+          className={"min-h-11 rounded-sm px-3 text-sm " + (tab === "awaiting" ? "bg-selected text-info" : "border border-border")}
+          onClick={() => setTab("awaiting")}
+        >
+          Awaiting event confirmation (0)
+        </button>
       </div>
 
       {tab === "list" ? (
@@ -80,6 +87,11 @@ function Body({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchEarnings>
             placeholder="Search company or ticker"
             className="min-h-12 max-w-md rounded-sm border border-control bg-surface px-3 text-base"
           />
+          {q ? (
+            <button type="button" className="min-h-11 text-sm font-medium text-info" onClick={() => setQ("")}>
+              Clear filters
+            </button>
+          ) : null}
           {q && filtered.length === 0 ? (
             <Empty>No companies match your filters.</Empty>
           ) : d.members.length === 0 ? (
@@ -127,6 +139,8 @@ function Body({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchEarnings>
             </div>
           )}
         </>
+      ) : tab === "awaiting" ? (
+        <Empty>No companies are waiting for event confirmation in this session.</Empty>
       ) : (
         <Panel title="Excluded candidates">
           {d.exclusions.length === 0 ? (
@@ -145,20 +159,8 @@ function Body({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchEarnings>
       )}
 
       {selected ? (
-        <div className="fixed inset-0 z-40 flex justify-end bg-nav/40" role="dialog" aria-modal="true" aria-labelledby="earn-detail">
-          <div className="flex h-full w-full max-w-[560px] flex-col overflow-y-auto bg-surface p-6">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-sm text-muted">{selected.ticker}</p>
-                <h2 id="earn-detail" className="text-xl font-semibold">
-                  {selected.name}
-                </h2>
-              </div>
-              <button type="button" className="min-h-11 rounded-sm border border-border px-3 text-sm" onClick={() => setDetail(null)}>
-                Close
-              </button>
-            </div>
-            <p className="mt-3 text-base">{timingLabel(selected.timing_quality)}</p>
+        <Drawer title={selected.name} kicker={selected.ticker} onClose={() => setDetail(null)}>
+            <p className="text-base">{timingLabel(selected.timing_quality)}</p>
             <p className="mt-1 text-sm text-muted">These inputs were locked before the decision. Newer observations are not used in this record.</p>
             <h3 className="mt-6 text-base font-semibold">Information used</h3>
             <dl className="mt-3 grid gap-3 text-sm">
@@ -180,8 +182,7 @@ function Body({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchEarnings>
                 <dd>{selected.options_valid == null ? "Not available" : selected.options_valid ? "Valid" : "Invalid source value"}</dd>
               </div>
             </dl>
-          </div>
-        </div>
+        </Drawer>
       ) : null}
     </div>
   );

@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { AppShell, Badge, Empty, Err, PageHeader, SessionTabs } from "@/components/app-shell";
+import { AppShell, Badge, Drawer, Empty, Err, PageHeader, SessionTabs } from "@/components/app-shell";
 import { fetchPredictions, postVerifyFreeze } from "@/desk/server-fns";
 import { decisionLabel, mainReason, paperLabel, verificationLabel } from "@/ui/labels";
 
@@ -137,18 +137,8 @@ function Body({
       <p className="text-sm text-muted">A prediction is a research expectation. It does not guarantee a paper position.</p>
 
       {selected ? (
-        <div className="fixed inset-0 z-40 flex justify-end bg-nav/40" role="dialog" aria-modal="true">
-          <div className="flex h-full w-full max-w-[560px] flex-col overflow-y-auto bg-surface p-6">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-sm text-muted">{selected.ticker}</p>
-                <h2 className="text-xl font-semibold">{decisionLabel(selected.status, selected.reasons)}</h2>
-              </div>
-              <button type="button" className="min-h-11 rounded-sm border border-border px-3 text-sm" onClick={() => setDetail(null)}>
-                Close
-              </button>
-            </div>
-            <p className="mt-3 text-base">{mainReason(selected.reasons)}</p>
+        <Drawer title={decisionLabel(selected.status, selected.reasons)} kicker={selected.ticker} onClose={() => setDetail(null)}>
+            <p className="text-base">{mainReason(selected.reasons)}</p>
             <p className="mt-2 text-sm text-muted">{paperLabel(selected.execution, selected.status)}</p>
             <p className="mt-2 text-sm text-muted">A forecast is not an order to a broker.</p>
             {selected.magnitude_low && selected.magnitude_high ? (
@@ -173,8 +163,7 @@ function Body({
                 <p className="break-all font-mono text-xs text-muted">Output {selected.output_hash}</p>
               </details>
             ) : null}
-          </div>
-        </div>
+        </Drawer>
       ) : null}
     </div>
   );

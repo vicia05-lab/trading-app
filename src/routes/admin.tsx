@@ -90,6 +90,38 @@ function Ops({
         </p>
       ) : null}
 
+      <Panel title="Source readiness">
+        <p className="mb-3 text-sm text-muted">Missing credentials do not become Ready because the page loaded.</p>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[36rem] text-left text-sm">
+            <caption className="sr-only">Required research data sources</caption>
+            <thead className="text-xs font-medium text-muted">
+              <tr>
+                <th className="pb-2 font-medium">Source</th>
+                <th className="pb-2 font-medium">Status</th>
+                <th className="pb-2 font-medium">Scope</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                ["Security identity", d.ports.security_master],
+                ["Market calendar", d.ports.calendar],
+                ["Earnings calendar", d.ports.earnings],
+                ["Stock quotes", d.ports.quotes],
+                ["Official closing prices", d.ports.official_marks],
+                ["Official opening prices", d.ports.official_marks],
+              ].map(([name, port]) => (
+                <tr key={name} className="h-14 border-t border-border">
+                  <td>{name}</td>
+                  <td>{port === "FIXTURE" ? "Sample data" : port === "ABSENT" ? "Not configured" : "Ready"}</td>
+                  <td className="text-muted">{port === "FIXTURE" ? "Fixture session only" : String(port)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+
       <section id="controls" className="scroll-mt-24 flex flex-col gap-4">
         <h2 className="text-xl font-semibold">Paper controls</h2>
         <Panel

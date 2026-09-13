@@ -2,6 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { AppShell, Badge, Empty, Err, PageHeader, Panel, Stat } from "@/components/app-shell";
 import { fetchHome } from "@/desk/server-fns";
+import { fetchAlpacaDataSecret } from "@/desk/alpaca-data-fns";
 import { formatSession, money, positionStateLabel } from "@/ui/labels";
 
 export const Route = createFileRoute("/")({
@@ -19,19 +20,29 @@ function Home() {
 
 function HomeLoader() {
   const [data, setData] = useState<Awaited<ReturnType<typeof fetchHome>> | null>(null);
+  const [secret, setSecret] = useState<Awaited<ReturnType<typeof fetchAlpacaDataSecret>> | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    void fetchHome()
-      .then(setData)
+    void Promise.all([fetchHome(), fetchAlpacaDataSecret().catch(() => null)])
+      .then(([h, s]) => {
+        setData(h);
+        setSecret(s);
+      })
       .catch((e) => setError(e instanceof Error ? e.message : "Could not load home"));
   }, []);
   if (error) return <Err>{error}</Err>;
   if (!data) return <Empty>Loading session…</Empty>;
   if ("needs_role" in data) return <Empty>Access pending.</Empty>;
-  return <HomeBody data={data} />;
+  return <HomeBody data={data} secret={secret} />;
 }
 
-function HomeBody({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchHome>>, { needs_role: true }> }) {
+function HomeBody({
+  data,
+  secret,
+}: {
+  data: Exclude<Awaited<ReturnType<typeof fetchHome>>, { needs_role: true }>;
+  secret: Awaited<ReturnType<typeof fetchAlpacaDataSecret>> | null;
+}) {
   const d = data.data;
   const s = d.latest_session;
   const locked = Number(s?.sealed_member_count ?? 0);
@@ -92,6 +103,8 @@ function HomeBody({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchHome>
         {s ? `${formatSession(s.session_date)} · US market time (ET)` : "No stored session"} · Sample data
       </p>
 
+      <SetupChecklist secret={secret} />
+
       <section className="rounded-md border border-border bg-surface p-4 md:p-6">
         <h2 className="text-[20px] font-semibold leading-7">{headline}</h2>
         <p className="mt-2 text-base text-muted">{support}</p>
@@ -138,6 +151,32 @@ function HomeBody({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchHome>
           />
         </Panel>
       </div>
+
+      <Panel title="Session timeline">
+        <ol className="grid gap-3">
+          {[
+            { label: "Collect information", state: s ? "complete" : "waiting" },
+            { label: "Lock session list", state: locked ? "complete" : "current" },
+            {
+              label: "Record decisions",
+              state: s?.freeze_resolution === "OPEN" ? "current" : recorded ? "complete" : "waiting",
+            },
+            {
+              label: reservedSlots > 0 ? "Establish paper entry" : "Establish paper entry",
+              state: reservedSlots > 0 ? "complete" : s?.freeze_resolution !== "OPEN" && predicts === 0 ? "skipped" : "waiting",
+            },
+            { label: "Review next-session open", state: s?.research_closed ? "complete" : "waiting" },
+            { label: "Research report available", state: s?.research_closed ? "complete" : "waiting" },
+          ].map((step) => (
+            <li key={step.label} className="flex min-h-11 items-center justify-between gap-3 border-b border-border pb-2">
+              <span className="text-sm">{step.label}</span>
+              <span className="text-sm text-muted">
+                {step.state === "complete" ? "Complete" : step.state === "current" ? "Current" : step.state === "skipped" ? "Not needed: no admitted positions" : "Waiting"}
+              </span>
+            </li>
+          ))}
+        </ol>
+      </Panel>
 
       <Panel title="Needs attention">
         {attention.length === 0 ? (
@@ -199,5 +238,39 @@ function HomeBody({ data }: { data: Exclude<Awaited<ReturnType<typeof fetchHome>
         </Panel>
       ) : null}
     </div>
+  );
+}
+
+function SetupChecklist({ secret }: { secret: Awaited<ReturnType<typeof fetchAlpacaDataSecret>> | null }) {
+  const ok = secret && "ok" in secret && secret.ok;
+  const saved = Boolean(ok && secret.status.configured);
+  const tested = Boolean(ok && secret.status.test_result === "VERIFIED");
+  const storage = Boolean(ok && !secret.status.storage_code);
+  if (saved && tested) return null;
+  const rows = [
+    { label: "Signed in", done: true, hint: "Account and permissions resolved." },
+    { label: "Secure storage ready", done: storage, hint: "View status in Admin. You do not paste an encryption master key." },
+    { label: "Alpaca keys saved", done: saved, hint: "An encrypted pair exists for this owner." },
+    { label: "Market-data check", done: tested, hint: "Saved pair accepted by the read-only endpoint." },
+    { label: "Required data sources ready", done: false, hint: "Sample data is labeled. Scheduled ingestion is not active yet." },
+    { label: "Scheduled workflow ready", done: true, hint: "Fixture jobs and deadlines are configured for this workspace." },
+  ];
+  return (
+    <Panel title="Workspace setup">
+      <ul className="grid gap-2">
+        {rows.map((r) => (
+          <li key={r.label} className="flex min-h-11 items-start justify-between gap-3 border-b border-border py-2">
+            <div>
+              <p className="text-sm font-medium">{r.label}</p>
+              <p className="text-sm text-muted">{r.hint}</p>
+            </div>
+            <span className={"text-sm " + (r.done ? "text-success" : "text-muted")}>{r.done ? "Done" : "Needed"}</span>
+          </li>
+        ))}
+      </ul>
+      <Link to="/admin" className="mt-3 inline-flex min-h-11 items-center text-sm font-medium text-info">
+        {saved ? "Test connection in Admin" : "Add keys"}
+      </Link>
+    </Panel>
   );
 }
