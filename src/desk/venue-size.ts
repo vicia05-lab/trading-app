@@ -2,21 +2,34 @@ import { DeskError } from "./util.ts";
 
 const FIXTURE_TICKERS = new Set(["ALFA", "BRAV", "CHRL", "DELT", "ECHO", "FOXT", "GOLF", "HOTL"]);
 
+/** Positive qty, no leading zeros. Fractional names like 0.5 are allowed; 0 and 0.000 are not. */
+export const QTY_RE = /^(?:0\.(?!0+$)[0-9]{1,9}|[1-9][0-9]*(?:\.[0-9]{1,9})?)$/;
+export const NOTIONAL_RE = /^(?:0\.(?!0+$)[0-9]{1,2}|[1-9][0-9]*(?:\.[0-9]{1,2})?)$/;
+export const LIMIT_RE = /^(?:0\.(?!0+$)[0-9]{1,4}|[1-9][0-9]*(?:\.[0-9]{1,4})?)$/;
+export const SYMBOL_RE = /^[A-Z][A-Z.]{0,9}$/;
+
+export function assertVenueMode(mode: "PAPER" | "LIVE"): "PAPER" {
+  if (mode === "LIVE") {
+    throw new DeskError("LIVE_DISABLED", "This workspace is paper-only. Live Alpaca orders are not available.", 422);
+  }
+  return "PAPER";
+}
+
+/** Reject-then-normalize. Do not strip hyphens or digits — a repaired symbol is not sent. */
 export function venueTicker(raw: string): string | null {
-  const trimmed = raw.trim().toUpperCase();
-  if (trimmed.startsWith("SEC-")) return null;
-  const s = trimmed.replace(/[^A-Z.]/g, "");
-  if (!s || FIXTURE_TICKERS.has(s)) return null;
-  if (!/^[A-Z][A-Z.]{0,9}$/.test(s)) return null;
+  const s = raw.trim().toUpperCase();
+  if (s.startsWith("SEC-")) return null;
+  if (FIXTURE_TICKERS.has(s)) return null;
+  if (!SYMBOL_RE.test(s)) return null;
   return s;
 }
 
 /** Floor(dollars / last) to 4 decimal places using integer cents/micros. No IEEE Number(). */
 export function qtyFromNotional(dollars: string, last: string): string {
-  if (!/^[0-9]+(?:\.[0-9]{1,2})?$/.test(dollars)) {
+  if (!NOTIONAL_RE.test(dollars)) {
     throw new DeskError("INVALID_SIZE", "Cannot size off-hours order", 422);
   }
-  if (!/^[0-9]+(?:\.[0-9]{1,6})?$/.test(last)) {
+  if (!/^[0-9]+(?:\.[0-9]{1,6})?$/.test(last) || last === "0" || /^0\.0+$/.test(last)) {
     throw new DeskError("INVALID_SIZE", "Cannot size off-hours order", 422);
   }
   const [dw, df = ""] = dollars.split(".");
