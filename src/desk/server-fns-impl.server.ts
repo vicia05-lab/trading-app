@@ -140,18 +140,7 @@ export async function postAlpacaCredentialsImpl(
   const { role, principal_id } = await roleOf(userId);
   requireOperator(role);
   if (data.mode === "LIVE") {
-    throw new Error("This workspace is paper-only. Live Alpaca trading is not available.");
-  }
-  const { execute } = await import("./alpaca-data-service.server");
-  const current = await execute(userId, false, (s) => s.status(userId));
-  if (!current.ok) {
-    throw new Error("Keys were not saved. Check operator access and secret storage.");
-  }
-  const stored = await execute(userId, true, (s) =>
-    s.save(userId, { apiKeyId: data.apiKeyId, apiSecret: data.apiSecret }, current.status.version),
-  );
-  if (!stored.ok) {
-    throw new Error("Keys were not saved. Check operator access and secret storage.");
+    throw new DeskError("LIVE_DISABLED", "This workspace is paper-only. Live Alpaca trading is not available.", 422);
   }
   return saveCredentials({ ...data, mode: "PAPER", actor: principal_id });
 }
