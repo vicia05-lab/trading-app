@@ -1,0 +1,68 @@
+{
+  "scope": "Isolated real component with injected synthetic transport; no authenticated integration",
+  "realProviderCalls": 0,
+  "checks": [
+    {
+      "name": "research screen renders with non-activation disclosure",
+      "pass": true
+    },
+    {
+      "name": "ORB qualifying synthetic input returns long reference with no order",
+      "pass": true
+    },
+    {
+      "name": "no-setup path renders as no setup not a position",
+      "pass": true
+    },
+    {
+      "name": "unverified source renders blocked not ready",
+      "pass": true
+    },
+    {
+      "name": "SPY trend selector changes rules and example",
+      "pass": true
+    },
+    {
+      "name": "late-session comparison renders qualifying result",
+      "pass": true
+    },
+    {
+      "name": "technical evidence expands with computed references",
+      "pass": true
+    },
+    {
+      "name": "primary research link uses safe external target",
+      "pass": true
+    },
+    {
+      "name": "375px mobile layout has no horizontal overflow",
+      "pass": true
+    },
+    {
+      "name": "keyboard can switch selected strategy",
+      "pass": true
+    },
+    {
+      "name": "transport error is visible with no fictitious position",
+      "pass": true
+    },
+    {
+      "name": "failed example can be retried successfully",
+      "pass": true
+    },
+    {
+      "name": "no uncaught browser exceptions",
+      "pass": true
+    },
+    {
+      "name": "12-second timeout restores retry instead of permanent loading",
+      "pass": true
+    }
+  ],
+  "viewport": {
+    "viewport": 375,
+    "document": 375
+  },
+  "browser": "152.0.4191.66",
+  "errors": []
+}

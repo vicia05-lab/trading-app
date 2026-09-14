@@ -1,4 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
+import * as Tabs from "@radix-ui/react-tabs";
+import { IntradayResearch } from "@/components/intraday-research";
 import { useEffect, useMemo, useState } from "react";
 import { AppShell, Badge, Drawer, Empty, Err, PageHeader, SessionTabs } from "@/components/app-shell";
 import { fetchPredictions, postVerifyFreeze } from "@/desk/server-fns";
@@ -17,7 +19,14 @@ function Predictions() {
   const { session } = Route.useSearch();
   return (
     <AppShell>
-      <Loader session={session} />
+      <Tabs.Root defaultValue="earnings" className="flex flex-col gap-5">
+        <Tabs.List aria-label="Research desk" className="flex flex-wrap gap-2 border-b border-border pb-3">
+          <Tabs.Trigger value="earnings" className="min-h-11 rounded-sm border border-border px-4 text-sm data-[state=active]:bg-selected data-[state=active]:text-info">Earnings ledger</Tabs.Trigger>
+          <Tabs.Trigger value="intraday" className="min-h-11 rounded-sm border border-border px-4 text-sm data-[state=active]:bg-selected data-[state=active]:text-info">Day trading research</Tabs.Trigger>
+        </Tabs.List>
+        <Tabs.Content value="earnings"><Loader session={session} /></Tabs.Content>
+        <Tabs.Content value="intraday"><IntradayResearch /></Tabs.Content>
+      </Tabs.Root>
     </AppShell>
   );
 }
