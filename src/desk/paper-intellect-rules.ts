@@ -23,12 +23,12 @@ export function evaluateStrategy(input: {
   vwap: string | null;
   change_pct: string | null;
 }): IntellectDecision {
-  const last = input.last ? unscaled6(input.last) : null;
-  const vwap = input.vwap ? unscaled6(input.vwap) : null;
+  const last = input.last != null ? unscaled6(input.last) : null;
+  const vwap = input.vwap != null ? unscaled6(input.vwap) : null;
   const change =
     input.change_pct != null && /^-?[0-9]+(?:\.[0-9]+)?$/.test(input.change_pct) ? Number(input.change_pct) : null;
-  if (last == null || vwap == null || vwap === 0n || change == null) {
-    return { action: "HOLD", reason: "Missing last, VWAP, or day change" };
+  if (last == null || vwap == null || last === 0n || vwap === 0n || change == null) {
+    return { action: "HOLD", reason: "Missing or zero last/VWAP, or missing day change" };
   }
   if (last > vwap && change > 0.5 && change < 4) {
     return {
