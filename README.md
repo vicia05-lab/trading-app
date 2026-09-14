@@ -1,8 +1,8 @@
 # Trading App
 
-Paper-modeled AMC earnings research desk with an Alpaca paper/live venue for quotes and orders.
+Paper-modeled AMC earnings research desk with an Alpaca paper venue for quotes and orders.
 
-**Earnings book is paper-only.** Alpaca is a separate venue. Insert keys on `/keys`. Operator can trade; Reviewer cannot.
+**Earnings book is paper-only.** Alpaca paper orders go through `/trade`. Live cash stays disabled. Admin market-data secrets do not route orders. Operator can trade; Reviewer cannot.
 
 ## Run
 
