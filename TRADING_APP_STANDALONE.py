@@ -728,13 +728,16 @@ def verify_freeze(store: Store, manifest_id: str, security_id: str) -> dict:
         [{"id": p["observation_id"], "hash": p["observation_hash"]} for p in sealed_pins],
         key=lambda p: p["id"],
     )
-    rebuilt_snap = snapshot_hash({
-        "permanent_security_id": security_id,
-        "event_key": member["event_key"],
-        "session_date": man["session_date"],
-        "card": sealed["card"],
-        "pins": pin_list,
-    })
+    try:
+        rebuilt_snap = snapshot_hash({
+            "permanent_security_id": security_id,
+            "event_key": member["event_key"],
+            "session_date": man["session_date"],
+            "card": sealed["card"],
+            "pins": pin_list,
+        })
+    except KernelError:
+        fail("sealed card is not canonical")
     if rebuilt_snap != member["snapshot_hash"]:
         fail("sealed card and pins do not match the stored snapshot hash")
 
@@ -756,7 +759,11 @@ def verify_freeze(store: Store, manifest_id: str, security_id: str) -> dict:
     ast = store.rule.get((man["rule_id"], man["rule_version"]))
     if ast is None:
         fail("sealed rule is missing", "RULE_UNAVAILABLE")
-    if rule_ast_hash(ast) != man["rule_ast_hash"]:
+    try:
+        ast_digest = rule_ast_hash(ast)
+    except KernelError:
+        fail("loaded rule is not canonical", "RULE_MISMATCH")
+    if ast_digest != man["rule_ast_hash"]:
         fail("loaded rule does not match the sealed digest", "RULE_MISMATCH")
 
     card = sealed["card"]
@@ -1086,6 +1093,29 @@ class VerifierProbes(unittest.TestCase):
 
     def test_20_no_freeze_is_not_stand_down(self):
         self.assertNotEqual("NO_FREEZE", "STAND_DOWN")
+
+    def test_t16_noncanonical_card_is_diagnosed(self):
+        st = build_intact_fixture()
+        st.sealed[("man-1", "SEC-A")]["card"] = dict(st.sealed[("man-1", "SEC-A")]["card"])
+        st.sealed[("man-1", "SEC-A")]["card"]["benchmark_relative_63d"] = 1
+        with self.assertRaises(VerifyError) as cm:
+            verify_freeze(st, "man-1", "SEC-A")
+        self.assertIn("canonical", cm.exception.detail)
+        self.assertEqual(st.audit[-1]["result"], "UNVERIFIABLE")
+        self.assertEqual(st.alarms[-1]["code"], "FREEZE_ARTIFACT_MISMATCH")
+
+    def test_t17_noncanonical_rule_is_diagnosed(self):
+        st = build_intact_fixture()
+        ast = copy.deepcopy(st.rule[("rule-1", "v1")])
+        ast["all"] = list(ast["all"])
+        ast["all"][3] = dict(ast["all"][3])
+        ast["all"][3]["value"] = 0.05
+        st.rule[("rule-1", "v1")] = ast
+        with self.assertRaises(VerifyError) as cm:
+            verify_freeze(st, "man-1", "SEC-A")
+        self.assertIn("canonical", cm.exception.detail)
+        self.assertEqual(st.audit[-1]["result"], "UNVERIFIABLE")
+        self.assertTrue(st.alarms)
 
 
 def main():

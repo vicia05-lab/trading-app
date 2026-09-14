@@ -1,4 +1,4 @@
-import { getSql } from "@/lib/db";
+import type { Sql } from "../lib/db.ts";
 import {
   KernelError,
   evaluate,
@@ -9,10 +9,10 @@ import {
   outputHash,
   ruleAstHash,
   snapshotHash,
-} from "@/kernel/index";
-import { asHex, DeskError, jsonCanon, newId } from "./util";
-import type { TypedCard } from "./features";
-import { assertCanonicalPinOrder, manifestObjectFromStored } from "./verify-decode";
+} from "../kernel/index.ts";
+import { asHex, DeskError, jsonCanon, newId } from "./util.ts";
+import type { TypedCard } from "./features.ts";
+import { assertCanonicalPinOrder, manifestObjectFromStored } from "./verify-decode.ts";
 
 const MARGIN = 3;
 
@@ -28,8 +28,7 @@ export type VerifyFreezeResult = {
   verification_level: "BYTE_VERIFIED";
 };
 
-async function ensureAudit(): Promise<void> {
-  const sql = await getSql();
+async function ensureAudit(sql: Sql): Promise<void> {
   await sql.query(`
     CREATE TABLE IF NOT EXISTS freeze_verify_audit (
       audit_id text PRIMARY KEY,
@@ -42,15 +41,16 @@ async function ensureAudit(): Promise<void> {
     )`);
 }
 
-async function recordOutcome(args: {
+async function recordOutcome(
+  sql: Sql,
+  args: {
   freezeId: string;
   manifestId: string;
   securityId: string;
   result: "BYTE_VERIFIED" | "UNVERIFIABLE";
   detail: string;
 }): Promise<void> {
-  await ensureAudit();
-  const sql = await getSql();
+  await ensureAudit(sql);
   await sql.query(
     `INSERT INTO freeze_verify_audit (audit_id, freeze_id, manifest_id, permanent_security_id, result, detail, checked_at)
      VALUES ($1,$2,$3,$4,$5,$6,NOW())`,
@@ -77,10 +77,11 @@ async function recordOutcome(args: {
 }
 
 async function fail(
+  sql: Sql,
   args: { freezeId: string; manifestId: string; securityId: string; detail: string },
   code = "FREEZE_ARTIFACT_MISMATCH",
 ): Promise<never> {
-  await recordOutcome({ ...args, result: "UNVERIFIABLE" });
+  await recordOutcome(sql, { ...args, result: "UNVERIFIABLE" });
   throw new DeskError(code, args.detail, 503);
 }
 
@@ -125,8 +126,12 @@ function sameCanon(a: unknown, b: unknown): boolean {
 }
 
 /** Read-only replay. Never creates a freeze. Diagnostics commit even when verification fails. */
-export async function verifyFreezeArtifact(manifestId: string, securityId: string): Promise<VerifyFreezeResult> {
-  const sql = await getSql();
+export async function verifyFreezeArtifact(
+  manifestId: string,
+  securityId: string,
+  sqlClient?: Sql,
+): Promise<VerifyFreezeResult> {
+  const sql = sqlClient ?? (await (await import("../lib/db.ts")).getSql());
   const fr = await sql.query<{
     freeze_id: string;
     input_hash: Buffer;
@@ -142,7 +147,35 @@ export async function verifyFreezeArtifact(manifestId: string, securityId: strin
   );
   if (!fr.length) throw new DeskError("NOT_FOUND", "no freeze to verify", 404);
   const freezeId = fr[0].freeze_id;
-  const reject = (detail: string, code?: string) => fail({ freezeId, manifestId, securityId, detail }, code);
+  const reject = (detail: string, code?: string) => fail(sql, { freezeId, manifestId, securityId, detail }, code);
+
+  try {
+    return await replaySealed(sql, fr[0], freezeId, manifestId, securityId, reject);
+  } catch (e) {
+    if (e instanceof DeskError) throw e;
+    if (e instanceof KernelError) {
+      await reject("artifact is not canonical");
+    }
+    throw e;
+  }
+}
+
+async function replaySealed(
+  sql: Sql,
+  fr0: {
+    freeze_id: string;
+    input_hash: Buffer;
+    output_hash: Buffer;
+    decision: string;
+    direction: string | null;
+    output_payload: unknown;
+    pin_count: number;
+  },
+  freezeId: string,
+  manifestId: string,
+  securityId: string,
+  reject: (detail: string, code?: string) => Promise<never>,
+): Promise<VerifyFreezeResult> {
 
   const man = await sql.query<{
     manifest_hash: Buffer;
@@ -194,7 +227,7 @@ export async function verifyFreezeArtifact(manifestId: string, securityId: strin
     `SELECT observation_id, observation_hash, pin_index FROM freeze_pin WHERE freeze_id = $1 ORDER BY pin_index`,
     [freezeId],
   );
-  if (sealedPins.length !== freezePins.length || sealedPins.length !== Number(fr[0].pin_count) || sealedPins.length !== Number(sealed[0].pin_count)) {
+  if (sealedPins.length !== freezePins.length || sealedPins.length !== Number(fr0.pin_count) || sealedPins.length !== Number(sealed[0].pin_count)) {
     await reject("pin count disagrees across freeze, sealed inputs, and pin rows");
   }
   for (let i = 0; i < sealedPins.length; i += 1) {
@@ -237,30 +270,42 @@ export async function verifyFreezeArtifact(manifestId: string, securityId: strin
   const pinList = sealedPins
     .map((p) => ({ id: p.observation_id, hash: asHex(p.observation_hash) }))
     .sort((a, b) => Buffer.from(a.id, "utf8").compare(Buffer.from(b.id, "utf8")));
-  const rebuiltSnap = snapshotHash({
-    permanent_security_id: securityId,
-    event_key: member[0].event_key,
-    session_date: man[0].session_date,
-    card: sealed[0].card,
-    pins: pinList,
-  });
+  let rebuiltSnap: string;
+  try {
+    rebuiltSnap = snapshotHash({
+      permanent_security_id: securityId,
+      event_key: member[0].event_key,
+      session_date: man[0].session_date,
+      card: sealed[0].card,
+      pins: pinList,
+    });
+  } catch (e) {
+    if (e instanceof KernelError) await reject("sealed card is not canonical");
+    throw e;
+  }
   if (rebuiltSnap !== asHex(member[0].snapshot_hash)) {
     await reject("sealed card and pins do not match the stored snapshot hash");
   }
 
   const pinTuples: [string, string][] = sealedPins.map((p) => [p.observation_id, asHex(p.observation_hash)]);
-  const inHash = inputHash({
-    manifestId,
-    securityId,
-    manifestHash: rebuiltManifest,
-    snapshotHash: rebuiltSnap,
-    ruleHash: asHex(man[0].rule_ast_hash),
-    engineHash: asHex(man[0].evaluator_artifact_hash),
-    costHash: asHex(man[0].cost_model_hash),
-    margin: MARGIN,
-    pins: pinTuples,
-  });
-  if (inHash !== asHex(fr[0].input_hash)) {
+  let inHash: string;
+  try {
+    inHash = inputHash({
+      manifestId,
+      securityId,
+      manifestHash: rebuiltManifest,
+      snapshotHash: rebuiltSnap,
+      ruleHash: asHex(man[0].rule_ast_hash),
+      engineHash: asHex(man[0].evaluator_artifact_hash),
+      costHash: asHex(man[0].cost_model_hash),
+      margin: MARGIN,
+      pins: pinTuples,
+    });
+  } catch (e) {
+    if (e instanceof KernelError) await reject("recomputed input hash is not canonical");
+    throw e;
+  }
+  if (inHash !== asHex(fr0.input_hash)) {
     await reject("recomputed input hash does not match the freeze artifact");
   }
 
@@ -272,7 +317,14 @@ export async function verifyFreezeArtifact(manifestId: string, securityId: strin
   if (ast == null) {
     await reject("sealed rule is missing", "RULE_UNAVAILABLE");
   }
-  if (ruleAstHash(ast) !== asHex(man[0].rule_ast_hash)) {
+  let astDigest: string;
+  try {
+    astDigest = ruleAstHash(ast);
+  } catch (e) {
+    if (e instanceof KernelError) await reject("loaded rule is not canonical", "RULE_MISMATCH");
+    throw e;
+  }
+  if (astDigest !== asHex(man[0].rule_ast_hash)) {
     await reject("loaded rule does not match the sealed digest", "RULE_MISMATCH");
   }
 
@@ -282,21 +334,27 @@ export async function verifyFreezeArtifact(manifestId: string, securityId: strin
     await reject("registered rule invalid");
   }
   const replayed = decisionPayload(ev, card);
-  const persisted = fr[0].output_payload;
+  const persisted = fr0.output_payload;
   let persistedHash: string;
   try {
     persistedHash = outputHash(inHash, persisted);
   } catch {
     await reject("stored output payload is not canonical");
   }
-  if (persistedHash! !== asHex(fr[0].output_hash)) {
+  if (persistedHash! !== asHex(fr0.output_hash)) {
     await reject("stored output payload does not hash to the freeze output hash");
   }
-  const replayedHash = outputHash(inHash, replayed);
-  if (replayedHash !== asHex(fr[0].output_hash) || !sameCanon(persisted, replayed)) {
+  let replayedHash: string;
+  try {
+    replayedHash = outputHash(inHash, replayed);
+  } catch (e) {
+    if (e instanceof KernelError) await reject("replayed decision is not canonical");
+    throw e;
+  }
+  if (replayedHash !== asHex(fr0.output_hash) || !sameCanon(persisted, replayed)) {
     await reject("replayed decision does not match the freeze artifact");
   }
-  if (fr[0].decision !== ev.decision || (fr[0].direction ?? null) !== (ev.direction ?? null)) {
+  if (fr0.decision !== ev.decision || (fr0.direction ?? null) !== (ev.direction ?? null)) {
     await reject("stored decision fields do not match the replay");
   }
 
@@ -304,7 +362,7 @@ export async function verifyFreezeArtifact(manifestId: string, securityId: strin
     `SELECT outcome, position_id FROM execution_admission WHERE freeze_id = $1`,
     [freezeId],
   );
-  await recordOutcome({ freezeId, manifestId, securityId, result: "BYTE_VERIFIED", detail: "replay matched sealed contents" });
+  await recordOutcome(sql, { freezeId, manifestId, securityId, result: "BYTE_VERIFIED", detail: "replay matched sealed contents" });
   return {
     freeze_id: freezeId,
     decision: ev.decision,
