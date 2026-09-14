@@ -1,7 +1,9 @@
 export type IntellectAction = "BUY" | "HOLD";
+export type IntellectKind = "BREAKOUT" | "DIP";
 
 export type IntellectDecision = {
   action: IntellectAction;
+  kind?: IntellectKind;
   notional?: string;
   reason: string;
 };
@@ -15,18 +17,52 @@ function unscaled6(raw: string): bigint | null {
   return BigInt(w + f.padEnd(6, "0"));
 }
 
-/** True when bid/ask exist and (ask-bid)/mid > 1%. Missing quotes do not trip this. */
-export function spreadTooWide(bid: string | null, ask: string | null): boolean {
+/** Day-change in basis points. "1.20" → 120. Invalid → null. */
+export function changeBp(raw: string | null): number | null {
+  if (raw == null || !/^-?[0-9]+(?:\.[0-9]+)?$/.test(raw)) return null;
+  const neg = raw.startsWith("-");
+  const body = neg ? raw.slice(1) : raw;
+  const [w, f = ""] = body.split(".");
+  const bp = Number(w) * 100 + Number((f + "00").slice(0, 2));
+  if (!Number.isFinite(bp)) return null;
+  return neg ? -bp : bp;
+}
+
+/** Bid and ask must both exist, be positive, and not crossed. Missing quotes fail closed. */
+export function quotesReady(bid: string | null, ask: string | null): boolean {
   const b = bid != null ? unscaled6(bid) : null;
   const a = ask != null ? unscaled6(ask) : null;
-  if (b == null || a == null || b === 0n || a === 0n) return false;
-  if (a <= b) return true;
+  return b != null && a != null && b > 0n && a > 0n && a >= b;
+}
+
+export function lastInsideQuote(last: string | null, bid: string | null, ask: string | null): boolean {
+  const L = last != null ? unscaled6(last) : null;
+  const b = bid != null ? unscaled6(bid) : null;
+  const a = ask != null ? unscaled6(ask) : null;
+  if (L == null || b == null || a == null) return false;
+  return b <= L && L <= a;
+}
+
+/** True when quotes exist and (ask-bid)/mid > 1%. Call only after quotesReady. */
+export function spreadTooWide(bid: string | null, ask: string | null): boolean {
+  if (!quotesReady(bid, ask)) return true;
+  const b = unscaled6(bid as string)!;
+  const a = unscaled6(ask as string)!;
+  if (a === b) return false;
   return 200n * (a - b) > a + b;
 }
 
+/** Breakout needs SPY bp > 0. Dip needs SPY bp > −150. Missing SPY fails closed. */
+export function spyAllows(kind: IntellectKind, spyChangePct: string | null): boolean {
+  const bp = changeBp(spyChangePct);
+  if (bp == null) return false;
+  if (kind === "BREAKOUT") return bp > 0;
+  return bp > -150;
+}
+
 /**
- * Paper sleeve only. BUY on VWAP breakout with 0.5–4% day change,
- * or a >2% dip under 98% of VWAP. Never sizes above $5,000.
+ * Paper sleeve only. BUY on VWAP breakout with 50–400 bp day change,
+ * or a dip under 98% of VWAP with bp < −200. Never sizes above $5,000.
  */
 export function evaluateStrategy(input: {
   last: string | null;
@@ -35,21 +71,22 @@ export function evaluateStrategy(input: {
 }): IntellectDecision {
   const last = input.last != null ? unscaled6(input.last) : null;
   const vwap = input.vwap != null ? unscaled6(input.vwap) : null;
-  const change =
-    input.change_pct != null && /^-?[0-9]+(?:\.[0-9]+)?$/.test(input.change_pct) ? Number(input.change_pct) : null;
-  if (last == null || vwap == null || last === 0n || vwap === 0n || change == null || !Number.isFinite(change)) {
+  const bp = changeBp(input.change_pct);
+  if (last == null || vwap == null || last === 0n || vwap === 0n || bp == null) {
     return { action: "HOLD", reason: "Missing, zero, negative, or non-finite print" };
   }
-  if (last > vwap && change > 0.5 && change < 4) {
+  if (last > vwap && bp > 50 && bp < 400) {
     return {
       action: "BUY",
+      kind: "BREAKOUT",
       notional: TICKET,
       reason: `Price above VWAP with day change ${input.change_pct}%`,
     };
   }
-  if (last * 100n < vwap * 98n && change < -2) {
+  if (last * 100n < vwap * 98n && bp < -200) {
     return {
       action: "BUY",
+      kind: "DIP",
       notional: TICKET,
       reason: `Price more than 2% under VWAP with day change ${input.change_pct}%`,
     };
