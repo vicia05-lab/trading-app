@@ -1,0 +1,3 @@
+# Prior design history is incomplete
+
+The prior weighted score, 8R validation cap, fixed 10% net-profit concentration gate, trade-level-DSR-as-power shortcut, common-beta residual-ranking-as-new-edge claim, and paper-fill-as-real-slippage assumption are rejected in this implementation. Engulfing is omitted as an unvalidated extra condition, not proven redundant. These notes do not reconstruct a complete prior trial set or establish N_eff=1. Previous inspected history cannot become OOS through renaming a registry. Any subsequent candidate-rate or P&L-driven change needs a new version and a retained reason.

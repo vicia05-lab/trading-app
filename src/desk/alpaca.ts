@@ -489,7 +489,7 @@ function numField(obj: unknown, key: string): string | null {
 
 export async function getSnapshots(
   symbols: string[],
-): Promise<Array<{ symbol: string; last: string | null; bid: string | null; ask: string | null; change_pct: string | null }>> {
+): Promise<Array<{ symbol: string; last: string | null; bid: string | null; ask: string | null; vwap: string | null; change_pct: string | null }>> {
   const list = normalizeWatchlist(symbols);
   const body = await alpacaFetch(
     `/v2/stocks/snapshots?symbols=${encodeURIComponent(list.join(","))}&feed=iex`,
@@ -507,7 +507,7 @@ export async function getSnapshots(
     if (last && prev && Number(prev) !== 0) {
       change_pct = (((Number(last) - Number(prev)) / Number(prev)) * 100).toFixed(2);
     }
-    return { symbol, last, bid, ask, change_pct };
+    return { symbol, last, bid, ask, vwap: numField(rec.dailyBar, "vw"), change_pct };
   });
 }
 

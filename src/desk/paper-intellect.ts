@@ -112,7 +112,7 @@ export async function runIntelligentPaperCycle(args: {
     }
     const decision = evaluateStrategy({
       last,
-      vwap: snap?.vwap ?? last,
+      vwap: snap?.vwap ?? null,
       change_pct: snap?.change_pct ?? null,
     });
     if (decision.action !== "BUY" || !decision.kind || !decision.notional || !NOTIONAL_RE.test(decision.notional)) {
