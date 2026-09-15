@@ -1,0 +1,97 @@
+{
+  "baseline": "6aafcdc45ba4e938fb11955dbc676e7bfa36b5db",
+  "node": "v26.8.1",
+  "platform": "win32",
+  "applicationTests": {
+    "tests": 286,
+    "pass": 286,
+    "fail": 0
+  },
+  "volumeTests": {
+    "tests": 109,
+    "pass": 109,
+    "fail": 0
+  },
+  "launcherTests": {
+    "tests": 2,
+    "pass": 2,
+    "fail": 0
+  },
+  "typecheck": "PASS",
+  "build": "DEVELOPMENT_BUNDLE_PASS",
+  "browser": {
+    "scope": "ISOLATED_COMPONENT_WITH_SYNTHETIC_TRANSPORT",
+    "authenticatedAppRun": false,
+    "realProviderRequests": false,
+    "brokerOrders": false,
+    "checks": [
+      "desktop renders real component",
+      "qualifying",
+      "capacity_full",
+      "missing_data",
+      "low_liquidity",
+      "same_bar_entry",
+      "missing_exit",
+      "mobile has no horizontal overflow",
+      "transport failure displays error without fabricated result",
+      "retry restores real component result",
+      "timeout clears busy state and permits retry",
+      "zero browser page errors"
+    ],
+    "passed": 12,
+    "errors": []
+  },
+  "fixtureCensus": {
+    "status": "COMPLETED",
+    "candidateObservations": "1",
+    "inputHash": "dceb9f8ec46613c38f98fc67d40217bdaa1d9f763cca89e1bf859a35bb044de0",
+    "artifacts": [
+      {
+        "name": "input.ndjson",
+        "sha256": "dceb9f8ec46613c38f98fc67d40217bdaa1d9f763cca89e1bf859a35bb044de0"
+      },
+      {
+        "name": "candidates.ndjson",
+        "sha256": "66f2983ae4beb4c4638a4ee4009df899349de2bc8da801d05193ceea63c878ea"
+      },
+      {
+        "name": "portfolio.ndjson",
+        "sha256": "6d3684ae1b3dc7f51060c3e613ac389c20d692958ae72c57f9881091e78d0cfb"
+      }
+    ],
+    "realMarketData": false
+  },
+  "legacyScriptTests": {
+    "tests": 197,
+    "pass": 181,
+    "fail": 16
+  },
+  "baselineLegacyScriptTests": {
+    "tests": 195,
+    "pass": 179,
+    "fail": 16
+  },
+  "unchangedLegacyFailures": [
+    "scripts\\brand-check.test.mjs:308:1",
+    "scripts\\brand-check.test.mjs:346:1",
+    "scripts\\brand-check.test.mjs:365:1",
+    "scripts\\check-auth-invariant.test.mjs:93:1",
+    "scripts\\grok-pwa-plugin.test.mjs:105:1",
+    "scripts\\grok-pwa-plugin.test.mjs:246:1",
+    "scripts\\grok-pwa-plugin.test.mjs:349:1",
+    "scripts\\grok-pwa-plugin.test.mjs:365:1",
+    "scripts\\grok-pwa-plugin.test.mjs:372:1",
+    "scripts\\grok-pwa-plugin.test.mjs:397:1",
+    "scripts\\grok-pwa-plugin.test.mjs:492:1",
+    "scripts\\migration-plan.test.mjs:59:1",
+    "scripts\\with-app-env.test.mjs:116:1",
+    "scripts\\with-app-env.test.mjs:62:1",
+    "scripts\\with-app-env.test.mjs:76:1",
+    "scripts\\write-atomic.test.mjs:167:1"
+  ],
+  "authInvariant": "NOT_VERIFIED_NO_TARGET_DEV_SERVER",
+  "productionDatabaseWrites": false,
+  "brokerOrders": false,
+  "productionRestart": false,
+  "retiredMirrorAccess": false
+}

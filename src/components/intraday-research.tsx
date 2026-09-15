@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { VolumeResearch } from "./volume-research";
 import { INTRADAY_STRATEGIES, EXPERIMENTAL_IDEAS } from "@/desk/intraday-catalog";
 import type { IntradayStrategyId } from "@/desk/intraday-catalog";
 import { runIntradaySyntheticExample } from "@/desk/intraday-research-fns";
@@ -226,6 +227,7 @@ export function IntradayResearch({
           </div>
         ) : null}
       </section>
+      <VolumeResearch />
       <section
         className="rounded-lg border border-border p-4 text-sm"
         aria-label="Activation requirements"
