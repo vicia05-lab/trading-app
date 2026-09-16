@@ -1,0 +1,67 @@
+name: Prepare Grok Lockfile Repair
+on:
+  push:
+    branches: ['fix/grok-app-completion-20260916']
+    paths: ['.github/workflows/grok-lockfile-repair.yml']
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  prepare:
+    if: github.repository == 'vicia05-lab/trading-app'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Resolve the existing dependency graph without lifecycle scripts
+        run: |
+          test "$GITHUB_REPOSITORY" = 'vicia05-lab/trading-app'
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          mkdir -p /tmp/grok-lock-review
+          git diff -- package-lock.json > /tmp/grok-lock-review/lockfile.diff
+          cp package-lock.json /tmp/grok-lock-review/package-lock.json
+      - name: Store candidate lockfile blob only; never change a branch or deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFile, writeFile } from 'node:fs/promises';
+          if (process.env.GITHUB_REPOSITORY !== 'vicia05-lab/trading-app') throw new Error('Wrong repository');
+          const content = await readFile('package-lock.json', 'utf8');
+          const response = await fetch('https://api.github.com/repos/vicia05-lab/trading-app/git/blobs', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${process.env.GH_TOKEN}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content, encoding: 'utf-8' })
+          });
+          if (!response.ok) throw new Error(`Blob upload HTTP ${response.status}`);
+          const { sha } = await response.json();
+          if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('Invalid blob response');
+          await writeFile('/tmp/grok-lock-review/blob-sha.txt', `${sha}\n`);
+          console.log(`Candidate lockfile blob: ${sha}. No branch was changed.`);
+          NODE
+      - name: Verify candidate with a clean install
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Diagnose application types on the installed graph
+        if: ${{ !cancelled() }}
+        run: npm run typecheck 2>&1 | tee /tmp/grok-lock-review/typecheck.txt
+      - name: Diagnose application tests on the installed graph
+        if: ${{ !cancelled() }}
+        run: npm test 2>&1 | tee /tmp/grok-lock-review/tests.txt
+      - name: Diagnose migration-free build
+        if: ${{ !cancelled() }}
+        run: npm run build:dev 2>&1 | tee /tmp/grok-lock-review/build.txt
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: grok-lockfile-review
+          path: /tmp/grok-lock-review/
+          retention-days: 3
