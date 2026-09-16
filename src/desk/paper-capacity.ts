@@ -19,7 +19,8 @@ function symbolOf(row: BrokerRow): string {
 export function paperCapacity(positions: BrokerRow[], orders: BrokerRow[], maxSlots = 3, maxGross = "15000.00") {
   if (orders.length >= 500) throw new Error("Paper capacity unavailable: order list may be truncated");
   const symbols = new Set<string>();
-  const held = new Set<string>();
+  const held = new Map<string, unknown>();
+  const remainingLong = new Map<string, bigint>();
   let gross = 0n;
   const limit = decimal(maxGross);
   for (const row of positions) {
@@ -27,14 +28,18 @@ export function paperCapacity(positions: BrokerRow[], orders: BrokerRow[], maxSl
     const value = decimal(row.market_value);
     if (value === 0n) throw new Error("Paper capacity unavailable: zero-valued position");
     gross += value < 0n ? -value : value;
-    symbols.add(symbol); held.add(symbol);
+    symbols.add(symbol); held.set(symbol, row.qty);
   }
   for (const row of orders) {
     const symbol = symbolOf(row);
     symbols.add(symbol);
     if (row.side === "sell") {
       if (!held.has(symbol)) throw new Error("Paper capacity unavailable: uncovered sell order");
-      continue; // Never subtract an unfilled sell from exposure.
+      const quantity = decimal(row.qty);
+      const available = remainingLong.get(symbol) ?? decimal(held.get(symbol));
+      if (quantity <= 0n || available < quantity) throw new Error("Paper capacity unavailable: uncovered sell quantity");
+      remainingLong.set(symbol, available - quantity);
+      continue; // A covered, unfilled sell still does not release gross exposure.
     }
     if (row.side !== "buy") throw new Error("Paper capacity unavailable: unknown order side");
     let reserved: bigint;

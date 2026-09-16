@@ -15,8 +15,10 @@ test("dollar cap is enforced even below three symbols", () => {
   assert.match(c.reason("MSFT", "5000.00")!, /gross cap/);
 });
 test("short exposure is absolute and pending sells do not free capacity", () => {
-  const c = paperCapacity([{ symbol: "AAPL", market_value: "-11000" }], [{ symbol: "AAPL", side: "sell", qty: "1" }]);
-  assert.match(c.reason("MSFT", "5000.00")!, /gross cap/);
+  const short = paperCapacity([{ symbol: "AAPL", market_value: "-11000" }], []);
+  assert.match(short.reason("MSFT", "5000.00")!, /gross cap/);
+  const long = paperCapacity([{ symbol: "AAPL", market_value: "11000", qty: "10" }], [{ symbol: "AAPL", side: "sell", qty: "1" }]);
+  assert.match(long.reason("MSFT", "5000.00")!, /gross cap/);
 });
 test("quantity limit orders reserve conservative exposure", () => {
   const c = paperCapacity([], [{ symbol: "AAPL", side: "buy", qty: "10", limit_price: "1000.001" }]);
@@ -32,4 +34,14 @@ test("invalid and oversized tickets cannot be reserved", () => {
   const c = paperCapacity([], []);
   for (const value of ["0", "-1", "5000.01"]) assert.throws(() => c.reserve("AAPL", value));
   for (const value of ["NaN", "", "1e3"]) assert.throws(() => c.reason("AAPL", value));
+});
+
+test("sell orders must be fully covered by verified remaining long quantities", () => {
+  const positions = [{ symbol: "AAPL", market_value: "1000", qty: "10" }];
+  assert.throws(() => paperCapacity(positions, [{ symbol: "AAPL", side: "sell", qty: "11" }]));
+  assert.throws(() => paperCapacity(positions, [
+    { symbol: "AAPL", side: "sell", qty: "6" }, { symbol: "AAPL", side: "sell", qty: "5" },
+  ]));
+  assert.throws(() => paperCapacity([{ symbol: "AAPL", market_value: "1000" }], [{ symbol: "AAPL", side: "sell", qty: "1" }]));
+  assert.throws(() => paperCapacity([{ symbol: "AAPL", market_value: "-1000", qty: "-10" }], [{ symbol: "AAPL", side: "sell", qty: "1" }]));
 });

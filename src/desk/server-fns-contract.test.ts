@@ -18,12 +18,25 @@ test("every server action retains authentication middleware", () => {
     assert.match(action, /\.middleware\(\[authMiddleware\]\)/, action.split("=")[0]);
   }
 });
+function assertOperatorBeforeWork(body: string, name: string): void {
+  assert.match(body, /await identityOf\(userId\)/);
+  const gate = body.indexOf("requireOperator(role)");
+  const work = body.indexOf("await import(");
+  assert.ok(gate >= 0 && work > gate, `${name} lacks an operator gate before work`);
+}
+test("authorization contract rejects a missing or late operator gate", () => {
+  const identity = "await identityOf(userId);";
+  const gate = "requireOperator(role);";
+  const work = 'await import("./alpaca");';
+  assert.throws(() => assertOperatorBeforeWork(identity + work, "missing"));
+  assert.throws(() => assertOperatorBeforeWork(identity + work + gate, "late"));
+  assert.doesNotThrow(() => assertOperatorBeforeWork(identity + gate + work, "valid"));
+});
 test("new mutating controls require operator authorization before doing work", () => {
   for (const name of ["postAlpacaCancelAllImpl", "runIntelligentCycleImpl", "postSleeveSchedulerImpl"]) {
     const body = implementation.split(`export async function ${name}(`)[1]?.split("\nexport ")[0];
     assert.ok(body, name);
-    assert.ok(body.indexOf("requireOperator(role)") < body.indexOf("await import("), `${name} authorizes too late`);
-    assert.match(body, /await identityOf\(userId\)/);
+    assertOperatorBeforeWork(body, name);
   }
 });
 test("reading scheduler status does not start or enable trading", () => {
