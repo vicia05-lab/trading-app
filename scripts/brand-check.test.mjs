@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -309,6 +309,8 @@ test("SKILL.md and AGENTS.md name the marker path and bound this script uses", (
   // Prose wraps, so the minute count may straddle a line break.
   const bound = new RegExp(`${OG_PENDING_MAX_AGE_MS / 60_000}\\s+minutes`);
   for (const rel of [".grok/skills/og/SKILL.md", "AGENTS.md"]) {
+    // Grok Builder injects skills; GitHub does not contain those platform files.
+    if (rel.startsWith(".grok/") && !existsSync(join(TEMPLATE_ROOT, rel))) continue;
     const doc = readDoc(rel);
     assert.ok(doc.includes(`/workspace/${OG_PENDING_REL_PATH}`), `${rel}: marker path`);
     assert.ok(bound.test(doc), `${rel}: staleness bound`);
@@ -350,6 +352,7 @@ test("the sections that own the brand-task prohibition never affirm a wait", () 
   const connectors = /(?:\s|[/,;]|\band\b|\bor\b|\bwait_tasks\b|\bget_task_output\b)+$/i;
   const negation = /\b(?:no|never|not|don['’]t)$/i;
   for (const section of PROHIBITION_SECTIONS) {
+    if (section.rel.startsWith(".grok/") && !existsSync(join(TEMPLATE_ROOT, section.rel))) continue;
     const where = `${section.rel} ${section.label}`;
     const prose = prohibitionSection(section);
     const mentions = [...prose.matchAll(/wait_tasks|get_task_output/g)];
@@ -362,7 +365,9 @@ test("the sections that own the brand-task prohibition never affirm a wait", () 
   }
 });
 
-test("SKILL.md tells the pass to self-check with the flag this CLI accepts", () => {
+test("SKILL.md tells the pass to self-check with the flag this CLI accepts", {
+  skip: !existsSync(join(TEMPLATE_ROOT, ".grok/skills/og/SKILL.md")) && "Grok-injected skill is not part of the GitHub repository",
+}, () => {
   const skill = readDoc(".grok/skills/og/SKILL.md");
   const invocations = skill.match(/node scripts\/brand-check\.mjs[^\n`]*/g) ?? [];
   assert.ok(invocations.length > 0);

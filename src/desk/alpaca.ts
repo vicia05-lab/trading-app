@@ -1,3 +1,4 @@
+import { parseStockSnapshot, parseCancelAllResponse, type StockSnapshot } from "./alpaca-response";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { getSql } from "@/lib/db";
@@ -463,13 +464,19 @@ export async function getClock(): Promise<Record<string, string | boolean | null
 }
 
 export async function getPositions(): Promise<Array<Record<string, string | boolean | null>>> {
-  return asList(await alpacaFetch("/v2/positions"));
+  const raw = await alpacaFetch("/v2/positions");
+  if (!Array.isArray(raw)) throw new DeskError("ALPACA_RESPONSE", "Invalid positions response", 502);
+  return asList(raw);
 }
 
 export async function getOrders(
   status: "open" | "closed" | "all" = "open",
+  limit = 50,
 ): Promise<Array<Record<string, string | boolean | null>>> {
-  return asList(await alpacaFetch(`/v2/orders?status=${encodeURIComponent(status)}&limit=50&direction=desc`));
+  if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new DeskError("INVALID_LIMIT", "Order limit must be 1–500", 422);
+  const raw = await alpacaFetch(`/v2/orders?status=${encodeURIComponent(status)}&limit=${limit}&direction=desc`);
+  if (!Array.isArray(raw)) throw new DeskError("ALPACA_RESPONSE", "Invalid orders response", 502);
+  return asList(raw);
 }
 
 function strField(obj: unknown, key: string): string | null {
@@ -487,28 +494,14 @@ function numField(obj: unknown, key: string): string | null {
   return null;
 }
 
-export async function getSnapshots(
-  symbols: string[],
-): Promise<Array<{ symbol: string; last: string | null; bid: string | null; ask: string | null; change_pct: string | null }>> {
+export async function getSnapshots(symbols: string[]): Promise<StockSnapshot[]> {
   const list = normalizeWatchlist(symbols);
   const body = await alpacaFetch(
     `/v2/stocks/snapshots?symbols=${encodeURIComponent(list.join(","))}&feed=iex`,
     { host: "data" },
   );
   const bag = body && !Array.isArray(body) ? body : {};
-  return list.map((symbol) => {
-    const snap = (bag as Record<string, unknown>)[symbol];
-    const rec = snap && typeof snap === "object" ? (snap as Record<string, unknown>) : {};
-    const last = numField(rec.latestTrade, "p") ?? numField(rec.dailyBar, "c");
-    const bid = numField(rec.latestQuote, "bp");
-    const ask = numField(rec.latestQuote, "ap");
-    const prev = numField(rec.prevDailyBar, "c");
-    let change_pct: string | null = null;
-    if (last && prev && Number(prev) !== 0) {
-      change_pct = (((Number(last) - Number(prev)) / Number(prev)) * 100).toFixed(2);
-    }
-    return { symbol, last, bid, ask, change_pct };
-  });
+  return list.map((symbol) => parseStockSnapshot(symbol, (bag as Record<string, unknown>)[symbol]));
 }
 
 export async function getDailyBars(
@@ -919,3 +912,8 @@ export async function closePosition(symbol: string): Promise<Record<string, stri
   return asRecord(raw);
 }
 
+
+/** A 207 may contain failures. An accepted cancellation is not a confirmed fill-state change. */
+export async function cancelAllOrders() {
+  return parseCancelAllResponse(await alpacaFetch("/v2/orders", { method: "DELETE" }));
+}

@@ -1,4 +1,5 @@
-import { getClock, getSnapshots, publicStatus, submitOrder } from "./alpaca";
+import { paperCapacity } from "./paper-capacity";
+import { getClock, getSnapshots, getPositions, getOrders, publicStatus, submitOrder } from "./alpaca";
 import { NOTIONAL_RE, venueTicker } from "./venue-size";
 import { getSql } from "@/lib/db";
 import {
@@ -85,6 +86,8 @@ export async function runIntelligentPaperCycle(args: {
     };
   }
 
+  const [positions, orders] = await Promise.all([getPositions(), getOrders("open", 500)]);
+  const capacity = paperCapacity(positions, orders);
   const snaps = await getSnapshots([...new Set([...symbols, "SPY"])]);
   const spy = snaps.find((s) => s.symbol === "SPY");
   const results: IntellectCycleRow[] = [];
@@ -103,7 +106,7 @@ export async function runIntelligentPaperCycle(args: {
     const ask = snap?.ask ?? null;
     const last = snap?.last ?? null;
     if (!quotesReady(bid, ask) || !lastInsideQuote(last, bid, ask)) {
-      results.push({ symbol, decision: { action: "HOLD", reason: "No usable NBBO-style quote" } });
+      results.push({ symbol, decision: { action: "HOLD", reason: "No usable IEX quote" } });
       continue;
     }
     if (spreadTooWide(bid, ask)) {
@@ -112,7 +115,7 @@ export async function runIntelligentPaperCycle(args: {
     }
     const decision = evaluateStrategy({
       last,
-      vwap: snap?.vwap ?? last,
+      vwap: snap?.vwap ?? null,
       change_pct: snap?.change_pct ?? null,
     });
     if (decision.action !== "BUY" || !decision.kind || !decision.notional || !NOTIONAL_RE.test(decision.notional)) {
@@ -126,6 +129,13 @@ export async function runIntelligentPaperCycle(args: {
       });
       continue;
     }
+    const blocked = capacity.reason(symbol, decision.notional);
+    if (blocked) {
+      results.push({ symbol, decision: { action: "HOLD", reason: blocked } });
+      continue;
+    }
+    // Reserve this run's budget BEFORE the network call, including uncertain outcomes.
+    capacity.reserve(symbol, decision.notional);
     try {
       const rec = await submitOrder({
         symbol,
@@ -135,18 +145,21 @@ export async function runIntelligentPaperCycle(args: {
         notional: decision.notional,
         actor: args.actor,
       });
+      if (typeof rec.id !== "string" || !rec.id) throw new Error("Missing broker order receipt; reconciliation required");
       bought += 1;
-      results.push({ symbol, decision, orderId: typeof rec.id === "string" ? rec.id : undefined });
+      results.push({ symbol, decision, orderId: rec.id });
     } catch (e) {
       results.push({
         symbol,
         decision: { action: "HOLD", reason: e instanceof Error ? e.message : "Order failed" },
       });
+      // A transport error does not prove rejection. Do not send more orders this run.
+      break;
     }
   }
   const boughtNames = results.filter((r) => r.orderId).map((r) => r.symbol);
   const summary = boughtNames.length
-    ? `Paper intellect bought ${boughtNames.join(", ")} at $${INTELLECT_TICKET} each.`
+    ? `Paper intellect submitted ${boughtNames.join(", ")} at $${INTELLECT_TICKET} each; fills are not yet confirmed.`
     : "Paper intellect: no new tickets.";
   return { connected: true, mode: "PAPER", results, summary };
 }

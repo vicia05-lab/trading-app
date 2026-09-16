@@ -237,3 +237,32 @@ export async function fetchTickerDetailImpl(userId: string, symbol: string) {
   await identityOf(userId);
   return getTickerDetail(symbol, userId);
 }
+
+export async function postAlpacaCancelAllImpl(userId: string) {
+  const { role } = await identityOf(userId);
+  requireOperator(role);
+  const { cancelAllOrders } = await import("./alpaca");
+  return cancelAllOrders();
+}
+
+export async function runIntelligentCycleImpl(userId: string) {
+  const { role, principal_id } = await identityOf(userId);
+  requireOperator(role);
+  const { runIntelligentPaperCycle } = await import("./paper-intellect");
+  const status = await publicStatus();
+  return runIntelligentPaperCycle({ symbols: status.watchlist, actor: principal_id });
+}
+
+export async function fetchSleeveSchedulerImpl(userId: string) {
+  await identityOf(userId);
+  const { schedulerStatus } = await import("./sleeve-scheduler");
+  // A status read must never activate a timer or submit an order.
+  return schedulerStatus();
+}
+
+export async function postSleeveSchedulerImpl(userId: string, enabled: boolean) {
+  const { role } = await identityOf(userId);
+  requireOperator(role);
+  const { setSchedulerEnabled } = await import("./sleeve-scheduler");
+  return setSchedulerEnabled(enabled);
+}
