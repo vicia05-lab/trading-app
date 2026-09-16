@@ -10,6 +10,7 @@ const INTERVAL_MS = 5 * 60 * 1000;
 const LEASE_SECONDS = 10 * 60;
 const ACTOR = "svc-sleeve-scheduler";
 const INSTANCE_ID = `sched-${randomUUID()}`;
+const DEFAULT_ENABLED = process.env.SLEEVE_SCHEDULER_DEFAULT_ON === "1";
 
 export type SchedulerStatus = {
   enabled: boolean;
@@ -37,7 +38,8 @@ async function ensureTable(): Promise<void> {
   await sql.query(`ALTER TABLE sleeve_scheduler ADD COLUMN IF NOT EXISTS lease_until timestamptz`);
   await sql.query(
     `INSERT INTO sleeve_scheduler (singleton_key, enabled, interval_sec)
-     VALUES (TRUE, FALSE, 300) ON CONFLICT (singleton_key) DO NOTHING`,
+     VALUES (TRUE, $1, 300) ON CONFLICT (singleton_key) DO NOTHING`,
+    [DEFAULT_ENABLED],
   );
 }
 
@@ -52,7 +54,7 @@ export async function schedulerStatus(): Promise<SchedulerStatus> {
   }>(`SELECT enabled, interval_sec, last_run_at::text, last_summary FROM sleeve_scheduler WHERE singleton_key = TRUE`);
   const r = rows[0];
   return {
-    enabled: r?.enabled ?? false,
+    enabled: r?.enabled ?? DEFAULT_ENABLED,
     interval_sec: r?.interval_sec ?? 300,
     last_run_at: r?.last_run_at ?? null,
     last_summary: r?.last_summary ?? null,
