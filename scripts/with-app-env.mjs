@@ -104,6 +104,13 @@ export function isMainModule(moduleUrl) {
   }
 }
 
+/** Launch the local Vite JS entry without a platform-specific .cmd shell. */
+export function resolveCommand(command, args, root = projectRoot()) {
+  return command === "vite"
+    ? { command: process.execPath, args: [join(root, "node_modules", "vite", "bin", "vite.js"), ...args] }
+    : { command, args };
+}
+
 function main(argv) {
   const [command, ...args] = argv;
   if (!command) {
@@ -111,7 +118,8 @@ function main(argv) {
     process.exit(2);
   }
   const env = mergeAppEnv(readAppEnv(projectRoot()), process.env);
-  const child = spawn(command, args, { stdio: "inherit", env });
+  const resolved = resolveCommand(command, args);
+  const child = spawn(resolved.command, resolved.args, { stdio: "inherit", env });
   // The dev server is long-running and is stopped by signalling this wrapper.
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.on(signal, () => child.kill(signal));

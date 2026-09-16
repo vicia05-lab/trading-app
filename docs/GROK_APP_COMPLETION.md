@@ -53,3 +53,8 @@ Keep this change unmerged until the applicable release gates are resolved:
 
 The recorded GitHub Actions artifacts identify the exact checked commit. They
 are code/build/test evidence, not evidence of successful deployment or trading.
+
+
+## 2026-09-16 order-readiness repair
+
+See [the order-readiness verification record](GROK_APP_VERIFICATION_20260916.md) for the subsequent durable-intent, shared buy-admission, exit-reconciliation, Trade-controls and Windows-launcher changes. That record separates tested implementation from unverified real broker fills; earlier release gates must not be read as proof of production execution.

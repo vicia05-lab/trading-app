@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppShell, Badge, Empty, Err, PageHeader, Panel, Stat } from "@/components/app-shell";
+import { PaperAutomation } from "@/components/paper-automation";
 import { AlpacaKeyInsert } from "@/components/alpaca-keys";
 import {
   fetchAlpacaDesk,
@@ -30,6 +31,7 @@ function Trade() {
   async function reload() {
     const d = await fetchAlpacaDesk();
     setDesk(d);
+    setError(null);
   }
 
   useEffect(() => {
@@ -43,6 +45,8 @@ function Trade() {
           title="Paper trade"
           purpose="Alpaca paper venue only. Earnings research stays on its own book. Live cash is disabled."
         />
+        <p className="text-xs text-muted">Grok GitHub app · vicia05-lab/trading-app · separate from your PC-hosted Trading App</p>
+        <button type="button" className="min-h-11 self-start rounded-sm border border-border px-3 text-sm" onClick={() => void reload().catch((e) => setError(e instanceof Error ? e.message : "Refresh failed"))}>Refresh paper desk</button>
         {error ? <Err>{error}</Err> : null}
         {!desk ? <Empty>Loading paper desk…</Empty> : <DeskBody desk={desk} onChanged={reload} />}
       </div>
@@ -69,7 +73,7 @@ function DeskBody({ desk, onChanged }: { desk: Desk; onChanged: () => Promise<vo
             Paste Alpaca paper keys. These are stored on the venue singleton and are not the Admin market-data secret.
             Live keys are rejected.
           </p>
-          <AlpacaKeyInsert />
+          <AlpacaKeyInsert onChanged={onChanged} />
         </Panel>
       ) : null}
 
@@ -89,6 +93,8 @@ function DeskBody({ desk, onChanged }: { desk: Desk; onChanged: () => Promise<vo
           />
         </div>
       ) : null}
+
+      <PaperAutomation canMutate={desk.can_mutate} paperReady={connected && mode === "PAPER" && "account" in desk && Boolean(desk.account) && !("error" in desk && desk.error)} onChanged={onChanged} />
 
       {connected ? (
         <Ticket canMutate={desk.can_mutate} quotes={"quotes" in desk ? desk.quotes : []} onChanged={onChanged} />
@@ -118,6 +124,8 @@ function Ticket({
   quotes: Array<{ symbol: string; last: string | null; bid: string | null; ask: string | null }> | undefined;
   onChanged: () => Promise<void>;
 }) {
+  const request = useRef<{ signature: string; id: string } | null>(null);
+  const submitting = useRef(false);
   const [symbol, setSymbol] = useState("AAPL");
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [type, setType] = useState<"market" | "limit">("market");
@@ -133,13 +141,17 @@ function Ticket({
   const quote = quotes?.find((q) => q.symbol === symbol.trim().toUpperCase());
 
   async function submit() {
-    if (!canMutate) return;
+    if (!canMutate || submitting.current) return;
+    submitting.current = true;
     setBusy(true);
     setErr(null);
     setNote(null);
     try {
+      const signature = JSON.stringify({ symbol: symbol.trim(), side, type, tif, sizeMode, notional, qty, limitPrice, extended });
+      if (!request.current || request.current.signature !== signature) request.current = { signature, id: crypto.randomUUID() };
       const rec = await postAlpacaOrder({
         data: {
+          requestId: request.current.id,
           symbol: symbol.trim(),
           side,
           type,
@@ -150,11 +162,12 @@ function Ticket({
           extendedHours: extended || undefined,
         },
       });
-      setNote(`Submitted ${String(rec.status ?? "order")} ${String(rec.id ?? "")}`.trim());
+      setNote(`Broker status: ${String(rec.status ?? "unknown")} · ${String(rec.id ?? "no receipt")}`);
       await onChanged();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Order rejected");
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -218,14 +231,15 @@ function Ticket({
         </label>
       </div>
       <p className="mt-3 text-xs text-muted">
+        Market buys use dollar notional; share-quantity buys require a limit price. Account-wide buy caps: 3 symbols, $5,000 per ticket, $15,000 gross.
         Last {quote?.last ?? "—"} · Bid {quote?.bid ?? "—"} · Ask {quote?.ask ?? "—"}
       </p>
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <button type="button" disabled={!canMutate || busy} onClick={() => void submit()} className="inline-flex min-h-11 items-center rounded-sm bg-primary px-4 text-sm font-medium text-primary-fg disabled:opacity-50">
           {busy ? "Submitting…" : canMutate ? `Submit ${side}` : "Reviewer cannot submit"}
         </button>
-        {note ? <span className="text-sm">{note}</span> : null}
-        {err ? <span className="text-sm text-danger">{err}</span> : null}
+        {note ? <><span className="break-all text-sm">{note}</span><button type="button" className="min-h-11 rounded-sm border border-border px-3 text-sm" disabled={busy} onClick={() => { request.current = null; setNote(null); }}>Start a new ticket</button></> : null}
+        {err ? <span className="text-sm text-danger">{err} An uncertain order may already exist. Retry the unchanged ticket to reconcile its original ID; do not create another ticket until the outcome is known.</span> : null}
       </div>
     </Panel>
   );

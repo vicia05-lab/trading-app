@@ -1,7 +1,11 @@
 import { parseStockSnapshot, parseCancelAllResponse, type StockSnapshot } from "./alpaca-response";
+import { confirmedReceipt, dispatchAuditedPaperOrder, paperClientOrderId } from "./durable-paper-submit";
+import { QTY_RE, NOTIONAL_RE, LIMIT_RE } from "./venue-size";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { getSql } from "@/lib/db";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { getSql, withTransaction, type Sql } from "@/lib/db";
+import { paperCapacity } from "./paper-capacity";
+import { buyReservationNotional, reservationSettled } from "./paper-order-admission";
 import { DeskError, newId } from "./util";
 import type { AlpacaMode, AlpacaPublicStatus } from "./alpaca-types";
 
@@ -87,6 +91,8 @@ async function ensureAlpacaSchema(): Promise<void> {
       submitted_by text NOT NULL,
       raw_receipt jsonb NOT NULL
     )`);
+  await sql.query("CREATE TABLE IF NOT EXISTS paper_order_gate (singleton_key boolean PRIMARY KEY CHECK (singleton_key))");
+  await sql.query("INSERT INTO paper_order_gate (singleton_key) VALUES (TRUE) ON CONFLICT DO NOTHING");
   schemaReady = true;
 }
 
@@ -303,7 +309,7 @@ async function alpacaFetch(path: string, init: RequestInit & { host?: "trade" | 
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   let res: Response;
   try {
-    res = await fetch(`${host}${path}`, { ...init, headers });
+    res = await fetch(`${host}${path}`, { ...init, headers, signal: init.signal ?? AbortSignal.timeout(15000) });
   } catch (e) {
     throw new DeskError(
       "ALPACA_UNREACHABLE",
@@ -820,6 +826,35 @@ async function liveTickerDetail(symbol: string): Promise<import("./alpaca-types"
   };
 }
 
+/** All buy entrypoints share this admission guard and durable in-flight reservation. */
+async function guardPaperBuy(sql: Sql, accountId: string, symbol: string, dollars: string): Promise<void> {
+  const [positions, orders] = await Promise.all([getPositions(), getOrders("open", 500)]);
+  const pending = await sql.query<{ client_order_id: string; raw_receipt: Record<string, unknown> }>(
+    `SELECT client_order_id, raw_receipt FROM alpaca_order_log
+     WHERE mode = 'PAPER' AND side = 'buy' AND raw_receipt->>'_grok_account_id' = $1
+       AND COALESCE(raw_receipt->>'_grok_capacity_settled', 'false') <> 'true'
+     ORDER BY submitted_at LIMIT 100`, [accountId],
+  );
+  if (pending.length >= 100) throw new DeskError("RECONCILIATION_REQUIRED", "Too many unresolved paper intents; review the order ledger", 409);
+  for (const local of pending) {
+    if (orders.some((order) => order.client_order_id === local.client_order_id)) continue;
+    let receipt = asRecord(local.raw_receipt);
+    if (!confirmedReceipt(receipt, local.client_order_id) || !reservationSettled(receipt, positions)) {
+      receipt = asRecord(await alpacaFetch(`/v2/orders:by_client_order_id?client_order_id=${encodeURIComponent(local.client_order_id)}`));
+    }
+    if (!confirmedReceipt(receipt, local.client_order_id) || !reservationSettled(receipt, positions)) {
+      throw new DeskError("RECONCILIATION_REQUIRED", "An earlier paper buy is not yet reconciled with broker orders and holdings. No new buy sent.", 409);
+    }
+    await sql.query(
+      `UPDATE alpaca_order_log SET status = $2, alpaca_order_id = $3, raw_receipt = $4::jsonb WHERE client_order_id = $1`,
+      [local.client_order_id, receipt.status, receipt.id, JSON.stringify({ ...receipt,
+        _grok_intent_hash: local.raw_receipt._grok_intent_hash, _grok_account_id: accountId, _grok_capacity_settled: true })],
+    );
+  }
+  const reason = paperCapacity(positions, orders).reason(symbol, dollars);
+  if (reason) throw new DeskError("PAPER_CAPACITY", reason, 409);
+}
+
 export async function submitOrder(args: {
   symbol: string;
   side: "buy" | "sell";
@@ -831,9 +866,12 @@ export async function submitOrder(args: {
   extendedHours?: boolean;
   confirmLive?: boolean;
   actor: string;
+  requestId?: string;
+  /** Server-only namespace. Never accepted by a browser facade. */
+  requestScope?: string;
 }): Promise<Record<string, string | boolean | null>> {
   const creds = await loadStored();
-  if (creds.mode === "LIVE") {
+  if (creds.mode !== "PAPER") {
     throw new DeskError("LIVE_DISABLED", "This workspace is paper-only. Live Alpaca orders are not available.", 422);
   }
   const symbol = normalizeSymbol(args.symbol);
@@ -842,60 +880,74 @@ export async function submitOrder(args: {
   if ((qty && notional) || (!qty && !notional)) {
     throw new DeskError("INVALID_SIZE", "Provide either share quantity or dollar notional, not both", 422);
   }
-  if (qty && !/^[0-9]+(?:\.[0-9]{1,9})?$/.test(qty)) {
-    throw new DeskError("INVALID_SIZE", "Quantity must be a positive decimal", 422);
+  if (qty && !QTY_RE.test(qty)) throw new DeskError("INVALID_SIZE", "Quantity must be a positive decimal", 422);
+  if (notional && !NOTIONAL_RE.test(notional)) throw new DeskError("INVALID_SIZE", "Notional must be positive dollars with at most 2 decimal places", 422);
+  if (args.type === "limit" && !LIMIT_RE.test(args.limitPrice?.trim() ?? "")) {
+    throw new DeskError("INVALID_LIMIT", "Limit orders need a positive limit price", 422);
   }
-  if (notional && !/^[0-9]+(?:\.[0-9]{1,2})?$/.test(notional)) {
-    throw new DeskError("INVALID_SIZE", "Notional must be dollars with at most 2 decimal places", 422);
-  }
-  if (args.type === "limit") {
-    const px = args.limitPrice?.trim();
-    if (!px || !/^[0-9]+(?:\.[0-9]{1,4})?$/.test(px)) {
-      throw new DeskError("INVALID_LIMIT", "Limit orders need a limit price", 422);
-    }
-  }
-  const clientOrderId = newId("clid");
-  const payload: Record<string, unknown> = {
-    symbol,
-    side: args.side,
-    type: args.type,
-    time_in_force: args.timeInForce,
-    client_order_id: clientOrderId,
-  };
-  if (qty) payload.qty = qty;
-  if (notional) payload.notional = notional;
-  if (args.type === "limit") payload.limit_price = args.limitPrice!.trim();
-  if (args.extendedHours) payload.extended_hours = true;
-  const raw = await alpacaFetch("/v2/orders", { method: "POST", body: JSON.stringify(payload) });
-  const rec = asRecord(raw);
-  const sql = await getSql();
-  try {
-    await sql.query(
-      `INSERT INTO alpaca_order_log (
-         local_id, alpaca_order_id, client_order_id, symbol, side, order_type, time_in_force,
-         qty, notional, limit_price, status, mode, submitted_at, submitted_by, raw_receipt
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW(),$13,$14::jsonb)`,
-      [
-        newId("aord"),
-        rec.id ?? null,
-        clientOrderId,
-        symbol,
-        args.side,
-        args.type,
-        args.timeInForce,
-        qty ?? null,
-        notional ?? null,
-        args.type === "limit" ? args.limitPrice!.trim() : null,
-        rec.status ?? "submitted",
-        creds.mode,
-        safeActor(args.actor),
-        JSON.stringify(raw),
-      ],
-    );
-  } catch {
-    /* local audit must not block a live/paper fill */
-  }
-  return rec;
+  // Pin the credential pair for the full account/intent/order sequence.
+  return withCreds(creds, async () => {
+    const account = asRecord(await alpacaFetch("/v2/account"));
+    if (typeof account.id !== "string" || !account.id) throw new DeskError("ALPACA_ACCOUNT", "Cannot identify the paper account", 503);
+    const clientOrderId = paperClientOrderId(account.id + ":" + (args.requestScope ?? args.actor), args.requestId ?? newId("req"));
+    const payload: Record<string, unknown> = {
+      symbol, side: args.side, type: args.type,
+      time_in_force: args.timeInForce, client_order_id: clientOrderId,
+    };
+    if (qty) payload.qty = qty;
+    if (notional) payload.notional = notional;
+    if (args.type === "limit") payload.limit_price = args.limitPrice!.trim();
+    if (args.extendedHours) payload.extended_hours = true;
+    const intentHash = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+    const sql = await getSql();
+    return dispatchAuditedPaperOrder({
+      clientOrderId,
+      claim: async () => withTransaction(async (tx) => {
+        // No broker POST occurs while this transaction is open. The committed
+        // SUBMITTING row reserves admission before another worker can proceed.
+        await tx.query("SELECT singleton_key FROM paper_order_gate WHERE singleton_key = TRUE FOR UPDATE");
+        const existing = await tx.query("SELECT client_order_id FROM alpaca_order_log WHERE client_order_id = $1", [clientOrderId]);
+        if (existing.length) return false;
+        if (args.side === "buy") await guardPaperBuy(tx, account.id as string, symbol, buyReservationNotional({ ...args, qty, notional }));
+        const rows = await tx.query<{ client_order_id: string }>(
+          `INSERT INTO alpaca_order_log (
+            local_id, alpaca_order_id, client_order_id, symbol, side, order_type, time_in_force,
+            qty, notional, limit_price, status, mode, submitted_at, submitted_by, raw_receipt
+          ) VALUES ($1,NULL,$2,$3,$4,$5,$6,$7,$8,$9,'SUBMITTING','PAPER',NOW(),$10,$11::jsonb)
+          ON CONFLICT (client_order_id) DO NOTHING RETURNING client_order_id`,
+          [newId("aord"), clientOrderId, symbol, args.side, args.type, args.timeInForce,
+            qty ?? null, notional ?? null, args.type === "limit" ? args.limitPrice!.trim() : null,
+            safeActor(args.actor), JSON.stringify({ _grok_intent_hash: intentHash, _grok_account_id: account.id })],
+        );
+        return rows.length === 1;
+      }),
+      load: async () => {
+        const rows = await sql.query<{ raw_receipt: Record<string, unknown> }>(
+          "SELECT raw_receipt FROM alpaca_order_log WHERE client_order_id = $1", [clientOrderId],
+        );
+        const saved = rows[0]?.raw_receipt;
+        if (!saved || saved._grok_intent_hash !== intentHash) {
+          throw new DeskError("REQUEST_CONFLICT", "This request ID already belongs to a different ticket. Reconcile it before creating a new order.", 409);
+        }
+        return asRecord(saved);
+      },
+      send: async () => asRecord(await alpacaFetch("/v2/orders", { method: "POST", body: JSON.stringify(payload) })),
+      lookup: async () => asRecord(await alpacaFetch(`/v2/orders:by_client_order_id?client_order_id=${encodeURIComponent(clientOrderId)}`)),
+      save: async (receipt) => {
+        // Do not hide write failures: the intent remains discoverable by client ID.
+        await sql.query(
+          `UPDATE alpaca_order_log SET alpaca_order_id = $2, status = $3, raw_receipt = $4::jsonb
+            WHERE client_order_id = $1`,
+          [clientOrderId, receipt.id, receipt.status, JSON.stringify({ ...receipt, _grok_intent_hash: intentHash, _grok_account_id: account.id })],
+        );
+      },
+    });
+  });
+}
+
+export async function getOrder(orderId: string): Promise<Record<string, string | boolean | null>> {
+  if (!/^[A-Za-z0-9-]{1,64}$/.test(orderId)) throw new DeskError("INVALID_ORDER", "Bad order id", 422);
+  return asRecord(await alpacaFetch(`/v2/orders/${encodeURIComponent(orderId)}`));
 }
 
 export async function cancelOrder(orderId: string): Promise<Record<string, string | boolean | null>> {

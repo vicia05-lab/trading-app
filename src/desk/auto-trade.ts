@@ -1,8 +1,11 @@
+import { paperExitStatus } from "./durable-paper-submit";
+import { venueTicker, qtyFromNotional } from "./venue-size";
 import { getSql } from "@/lib/db";
 import { DeskError } from "./util";
 import {
   closePosition,
   getClock,
+  getOrder,
   getDailyBars,
   getSnapshots,
   publicStatus,
@@ -11,15 +14,6 @@ import {
 
 const TICKET_DOLLARS = "5000.00";
 const MAX_SLOTS = 3;
-const FIXTURE_TICKERS = new Set(["ALFA", "BRAV", "CHRL", "DELT", "ECHO", "FOXT", "GOLF", "HOTL"]);
-
-function venueTicker(raw: string): string | null {
-  const s = raw.trim().toUpperCase().replace(/[^A-Z.]/g, "");
-  if (!s || FIXTURE_TICKERS.has(s) || s.startsWith("SEC-")) return null;
-  if (!/^[A-Z][A-Z.]{0,9}$/.test(s)) return null;
-  return s;
-}
-
 export type AutoFill = {
   position_id: string;
   symbol: string;
@@ -27,6 +21,7 @@ export type AutoFill = {
   notional: string | null;
   status: string;
   alpaca_order_id: string | null;
+  exit_order_id: string | null;
   last_error: string | null;
   submitted_at: string | null;
 };
@@ -52,6 +47,7 @@ async function ensureFillTable(): Promise<void> {
       last_run_at timestamptz,
       last_summary text
     )`);
+  await sql.query(`ALTER TABLE alpaca_desk_fill ADD COLUMN IF NOT EXISTS exit_order_id text`);
   await sql.query(`INSERT INTO alpaca_auto_cycle (singleton_key) VALUES (TRUE) ON CONFLICT DO NOTHING`);
 }
 
@@ -80,12 +76,12 @@ async function upsertFill(row: {
   );
 }
 
-export async function sendEntry(args: { positionId: string; ticker: string; actor: string }): Promise<void> {
+export async function sendEntry(args: { positionId: string; ticker: string; actor: string }): Promise<boolean> {
   await ensureFillTable();
   const status = await publicStatus();
   if (!status.connected) {
     await upsertFill({ positionId: args.positionId, symbol: args.ticker, side: "buy", status: "SKIPPED", error: "Alpaca not connected" });
-    return;
+    return false;
   }
   if (status.mode === "LIVE") {
     await upsertFill({
@@ -95,14 +91,14 @@ export async function sendEntry(args: { positionId: string; ticker: string; acto
       status: "BLOCKED_LIVE",
       error: "Auto-execution is paper-only",
     });
-    return;
+    return false;
   }
   const sql = await getSql();
   const existing = await sql.query<{ status: string }>(
     `SELECT status FROM alpaca_desk_fill WHERE position_id = $1`,
     [args.positionId],
   );
-  if (existing[0] && ["SUBMITTED", "FILLED", "CLOSED"].includes(existing[0].status)) return;
+  if (existing[0] && ["SUBMITTED", "FILLED", "CLOSED"].includes(existing[0].status)) return false;
 
   const symbol = venueTicker(args.ticker);
   if (!symbol) {
@@ -113,7 +109,7 @@ export async function sendEntry(args: { positionId: string; ticker: string; acto
       status: "SKIPPED",
       error: "Fixture ticker is not an Alpaca symbol",
     });
-    return;
+    return false;
   }
 
   try {
@@ -128,6 +124,8 @@ export async function sendEntry(args: { positionId: string; ticker: string; acto
         timeInForce: "day",
         notional: TICKET_DOLLARS,
         actor: args.actor,
+        requestScope: "grok-auto-entry",
+        requestId: `entry:${args.positionId}`,
       });
     } else {
       const snaps = await getSnapshots([symbol]);
@@ -142,16 +140,21 @@ export async function sendEntry(args: { positionId: string; ticker: string; acto
         limitPrice: last,
         extendedHours: true,
         actor: args.actor,
+        requestScope: "grok-auto-entry",
+        requestId: `entry:${args.positionId}`,
       });
     }
+    if (typeof rec.id !== "string" || !rec.id) throw new Error("Missing broker entry receipt");
+    if (["rejected", "canceled", "expired", "replaced"].includes(String(rec.status).toLowerCase())) throw new Error(`Broker entry ${rec.status}`);
     await upsertFill({
       positionId: args.positionId,
       symbol,
       side: "buy",
       notional: TICKET_DOLLARS,
       status: String(rec.status ?? "SUBMITTED").toUpperCase() === "FILLED" ? "FILLED" : "SUBMITTED",
-      orderId: typeof rec.id === "string" ? rec.id : null,
+      orderId: rec.id,
     });
+    return rec._grok_replayed !== true;
   } catch (e) {
     await upsertFill({
       positionId: args.positionId,
@@ -161,49 +164,61 @@ export async function sendEntry(args: { positionId: string; ticker: string; acto
       status: "ERROR",
       error: e instanceof Error ? e.message : "Alpaca entry failed",
     });
+    return false;
   }
 }
 
-export async function sendExit(args: { positionId: string; ticker: string; actor: string }): Promise<void> {
+export async function sendExit(args: { positionId: string; ticker: string; actor: string }): Promise<boolean> {
   await ensureFillTable();
   const status = await publicStatus();
-  if (!status.connected || status.mode === "LIVE") return;
+  if (!status.connected || status.mode !== "PAPER") return false;
   const symbol = venueTicker(args.ticker);
-  if (!symbol) return;
+  if (!symbol) return false;
+  const sql = await getSql();
+  const rows = await sql.query<{ status: string; exit_order_id: string | null }>(
+    "SELECT status, exit_order_id FROM alpaca_desk_fill WHERE position_id = $1", [args.positionId],
+  );
+  const row = rows[0];
+  if (!row || row.status === "CLOSED") return false;
+  // A crashed or timed-out close has an uncertain outcome. Never send another blind DELETE.
+  if (row.status === "EXIT_PENDING" && !row.exit_order_id) return false;
   try {
-    const rec = await closePosition(symbol);
-    const sql = await getSql();
+    let rec: Record<string, string | boolean | null>;
+    if (row.status === "EXIT_SUBMITTED" && row.exit_order_id) {
+      rec = await getOrder(row.exit_order_id);
+    } else {
+      const claimed = await sql.query<{ position_id: string }>(
+        `UPDATE alpaca_desk_fill SET status = 'EXIT_PENDING', exit_order_id = NULL,
+          last_error = 'Exit outcome pending reconciliation'
+         WHERE position_id = $1 AND status IN ('SUBMITTED','FILLED','EXIT_ERROR') RETURNING position_id`,
+        [args.positionId],
+      );
+      if (!claimed.length) return false;
+      rec = await closePosition(symbol);
+    }
+    const state = paperExitStatus(rec);
     await sql.query(
-      `UPDATE alpaca_desk_fill SET status = 'CLOSED', closed_at = NOW(), last_error = NULL,
-        alpaca_order_id = COALESCE($2, alpaca_order_id)
+      `UPDATE alpaca_desk_fill SET status = $2, exit_order_id = $3,
+        closed_at = CASE WHEN $2 = 'CLOSED' THEN NOW() ELSE NULL END,
+        last_error = CASE WHEN $2 = 'EXIT_ERROR' THEN $4 ELSE NULL END
        WHERE position_id = $1`,
-      [args.positionId, typeof rec.id === "string" ? rec.id : null],
+      [args.positionId, state, rec.id, `Broker exit ${String(rec.status)}`],
     );
+    return state === "CLOSED";
   } catch (e) {
-    await upsertFill({
-      positionId: args.positionId,
-      symbol,
-      side: "sell",
-      status: "EXIT_ERROR",
-      error: e instanceof Error ? e.message : "Alpaca exit failed",
-    });
+    // Preserve EXIT_PENDING / EXIT_SUBMITTED and the original entry order ID.
+    await sql.query("UPDATE alpaca_desk_fill SET last_error = $2 WHERE position_id = $1", [
+      args.positionId, e instanceof Error ? e.message.slice(0, 400) : "Exit reconciliation failed",
+    ]);
+    return false;
   }
-}
-
-function qtyFromNotional(dollars: string, last: string): string {
-  const d = Number(dollars);
-  const p = Number(last);
-  if (!(d > 0) || !(p > 0)) throw new DeskError("INVALID_SIZE", "Cannot size off-hours order", 422);
-  const q = Math.floor((d / p) * 10000) / 10000;
-  if (q < 0.0001) throw new DeskError("INVALID_SIZE", "Notional too small for last price", 422);
-  return q.toFixed(4);
 }
 
 export async function listFills(): Promise<AutoFill[]> {
   await ensureFillTable();
   const sql = await getSql();
   return sql.query<AutoFill>(
-    `SELECT position_id, symbol, side, notional, status, alpaca_order_id, last_error, submitted_at::text
+    `SELECT position_id, symbol, side, notional, status, alpaca_order_id, exit_order_id, last_error, submitted_at::text
      FROM alpaca_desk_fill ORDER BY submitted_at DESC NULLS LAST LIMIT 40`,
   );
 }
@@ -262,7 +277,7 @@ async function liveWatchlistCycle(actor: string): Promise<{ scanned: number; adm
 
   const sql = await getSql();
   const open = await sql.query<{ c: number }>(
-    `SELECT COUNT(*)::int AS c FROM alpaca_desk_fill WHERE status IN ('SUBMITTED','FILLED')`,
+    `SELECT COUNT(*)::int AS c FROM alpaca_desk_fill WHERE status IN ('SUBMITTED','FILLED','EXIT_PENDING','EXIT_SUBMITTED','EXIT_ERROR')`,
   );
   let slots = Math.max(0, MAX_SLOTS - (open[0]?.c ?? 0));
   if (slots <= 0) {
@@ -319,9 +334,9 @@ async function liveWatchlistCycle(actor: string): Promise<{ scanned: number; adm
       skipped.push(`${symbol}:stand-down`);
       continue;
     }
-    await sendEntry({ positionId: `live:${symbol}`, ticker: symbol, actor });
-    admitted.push(symbol);
-    slots -= 1;
+    const sent = await sendEntry({ positionId: `live:${symbol}`, ticker: symbol, actor });
+    if (sent) { admitted.push(symbol); slots -= 1; }
+    else skipped.push(`${symbol}:not-submitted`);
   }
   return { scanned, admitted, skipped };
 }
@@ -342,19 +357,18 @@ export async function syncBook(actor: string): Promise<{ entries: number; exits:
       p.position_id,
     ]);
     if (!fill[0] || ["ERROR", "SKIPPED", "BLOCKED_LIVE"].includes(fill[0].status)) {
-      await sendEntry({ positionId: p.position_id, ticker: p.display_ticker, actor });
-      entries += 1;
+      if (await sendEntry({ positionId: p.position_id, ticker: p.display_ticker, actor })) entries += 1;
+      else errors.push(`${p.display_ticker}:entry not newly submitted`);
     }
   }
 
   const done = await sql.query<{ position_id: string; display_ticker: string }>(
     `SELECT p.position_id, p.display_ticker FROM "position" p
      JOIN alpaca_desk_fill f ON f.position_id = p.position_id
-     WHERE p.state IN ('FLAT','CLOSED','NO_FILL') AND f.status IN ('SUBMITTED','FILLED','EXIT_ERROR')`,
+     WHERE p.state IN ('FLAT','CLOSED','NO_FILL') AND f.status IN ('SUBMITTED','FILLED','EXIT_ERROR','EXIT_PENDING','EXIT_SUBMITTED')`,
   );
   for (const p of done) {
-    await sendExit({ positionId: p.position_id, ticker: p.display_ticker, actor });
-    exits += 1;
+    if (await sendExit({ positionId: p.position_id, ticker: p.display_ticker, actor })) exits += 1;
   }
 
   return { entries, exits, errors };
@@ -372,7 +386,7 @@ export async function runAutoCycle(actor: string): Promise<{
   await ensureFillTable();
   const st = await publicStatus();
   if (!st.connected) {
-    const summary = "No Alpaca keys. Paste them on Admin first.";
+    const summary = "No Alpaca paper keys. Connect them on Trade; Admin data keys do not authorize orders.";
     await recordCycle(summary);
     return { connected: false, mode: null, frozen: 0, entries: 0, exits: 0, summary, fills: await listFills() };
   }
@@ -408,8 +422,8 @@ export async function runAutoCycle(actor: string): Promise<{
 
   const book = await syncBook(actor);
   const summary = liveAdmitted.length
-    ? `Paper auto-run: bought ${liveAdmitted.join(", ")} ($5,000 each). ${liveSkipped} watchlist names stood down. Book sync entries ${book.entries}, exits ${book.exits}.`
-    : `Paper auto-run: no new tickets (${liveSkipped} watchlist names stood down). Book sync entries ${book.entries}, exits ${book.exits}.`;
+    ? `Paper auto-run: submitted ${liveAdmitted.join(", ")} ($5,000 each). ${liveSkipped} watchlist names stood down. Book sync: ${book.entries} new entry submissions, ${book.exits} confirmed exits.`
+    : `Paper auto-run: no new tickets (${liveSkipped} watchlist names stood down). Book sync: ${book.entries} new entry submissions, ${book.exits} confirmed exits.`;
   await recordCycle(summary);
   return {
     connected: true,

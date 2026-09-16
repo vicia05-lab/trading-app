@@ -179,6 +179,7 @@ export const postAlpacaOrder = createServerFn({ method: "POST" })
       notional: z.string().optional(),
       limitPrice: z.string().optional(),
       extendedHours: z.boolean().optional(),
+      requestId: z.string().min(1).max(128).optional(),
     }),
   )
   .handler(async ({ context, data }) => {
