@@ -110,5 +110,29 @@ test("the CLI reports rather than silently passing when run via a symlink", asyn
     "http://127.0.0.1:1",
   ]).catch((err) => err);
   assert.equal(error.code, 2);
-  assert.match(error.stderr, /could not read the dev server's resolved VITE_AUTH_ENABLED/);
+  assert.match(error.stderr, /target did not identify as the Grok GitHub app/);
+});
+
+test("the CLI requires an explicit target instead of probing another local app", async () => {
+  const env = { ...process.env }; delete env.GROK_DEV_URL;
+  const error = await promisify(execFile)(process.execPath, [join(projectRoot(), "scripts/check-auth-invariant.mjs")], { env }).catch((err) => err);
+  assert.equal(error.code, 2);
+  assert.match(error.stderr, /no default host will be probed/);
+});
+
+test("a different service identity is rejected before reading its auth settings", async () => {
+  const { createServer } = await import("node:http");
+  const paths = [];
+  const server = createServer((request, response) => {
+    paths.push(request.url); response.setHeader("Content-Type", "application/json");
+    response.end(JSON.stringify({ service: "not-the-grok-project", VITE_AUTH_ENABLED: "true" }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const url = "http://127.0.0.1:" + server.address().port;
+    const error = await promisify(execFile)(process.execPath, [join(projectRoot(), "scripts/check-auth-invariant.mjs"), "--dev-url", url]).catch((err) => err);
+    assert.equal(error.code, 2);
+    assert.match(error.stderr, /refusing to compare another app/);
+    assert.deepEqual(paths, ["/api/trading-app/v1/health/live"]);
+  } finally { await new Promise((resolve) => server.close(resolve)); }
 });

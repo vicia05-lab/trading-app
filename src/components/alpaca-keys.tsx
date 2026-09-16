@@ -25,7 +25,7 @@ const EMPTY_STATUS: AlpacaPublicStatus = {
 };
 
 /** Standalone key insertion — does not wait on the rest of Admin. */
-export function AlpacaKeyInsert() {
+export function AlpacaKeyInsert({ onChanged }: { onChanged?: () => Promise<void> | void } = {}) {
   const [status, setStatus] = useState<AlpacaPublicStatus>(EMPTY_STATUS);
   const [canMutate, setCanMutate] = useState(true);
   const [ready, setReady] = useState(false);
@@ -51,7 +51,7 @@ export function AlpacaKeyInsert() {
       canMutate={canMutate}
       ready={ready}
       loadErr={loadErr}
-      onChanged={reload}
+      onChanged={async () => { await reload(); await onChanged?.(); }}
     />
   );
 }

@@ -200,6 +200,7 @@ export async function postAlpacaOrderImpl(
     notional?: string;
     limitPrice?: string;
     extendedHours?: boolean;
+    requestId?: string;
     confirmLive?: boolean;
   },
 ) {

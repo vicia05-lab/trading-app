@@ -11,6 +11,7 @@ import {
   parseAppEnv,
   projectRoot,
   readAppEnv,
+  resolveCommand,
 } from "./with-app-env.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -19,6 +20,8 @@ const WRAPPER_ROOT = makeWorkspace('{"VITE_AUTH_ENABLED":"false"}');
 mkdirSync(join(WRAPPER_ROOT, "scripts"));
 const WRAPPER = join(WRAPPER_ROOT, "scripts/with-app-env.mjs");
 writeFileSync(WRAPPER, readFileSync(join(projectRoot(), "scripts/with-app-env.mjs")));
+const fixtureProcessEnv = { ...process.env };
+delete fixtureProcessEnv.VITE_AUTH_ENABLED;
 const PRINT_FLAG = "process.stdout.write(String(process.env.VITE_AUTH_ENABLED));";
 
 function makeWorkspace(appEnvJson) {
@@ -83,7 +86,7 @@ test("the wrapped command runs with the app env applied", async () => {
     process.execPath,
     "-e",
     PRINT_FLAG,
-  ]);
+  ], { env: fixtureProcessEnv });
   assert.equal(stdout, "false");
 });
 
@@ -127,6 +130,16 @@ test("the CLI still runs when invoked through a symlinked path", async () => {
     process.execPath,
     "-e",
     PRINT_FLAG,
-  ]);
+  ], { env: fixtureProcessEnv });
   assert.equal(stdout, "false");
+});
+
+test("Vite launches through Node on every platform, without shell interpolation", () => {
+  const root = join(tmpdir(), "workspace with spaces");
+  assert.deepEqual(resolveCommand("vite", ["build"], root), {
+    command: process.execPath, args: [join(root, "node_modules", "vite", "bin", "vite.js"), "build"],
+  });
+  assert.deepEqual(resolveCommand(process.execPath, ["-e", "process.exit(0)"]), {
+    command: process.execPath, args: ["-e", "process.exit(0)"],
+  });
 });

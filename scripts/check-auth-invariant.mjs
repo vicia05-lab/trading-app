@@ -25,7 +25,7 @@
 import { APP_ENV_ROUTE } from "./app-env-plugin.mjs";
 import { isMainModule, mergeAppEnv, projectRoot, readAppEnv } from "./with-app-env.mjs";
 
-const DEFAULT_DEV_URL = "http://127.0.0.1:8080";
+const EXPECTED_SERVICE = "grok-github-trading-app";
 
 /** The predicate `src/lib/auth/{client,server}.ts` apply to the flag. */
 export function authEnabledFromEnvValue(value) {
@@ -91,7 +91,19 @@ export function buildAuthEnabled(root = projectRoot(), processEnv = process.env)
 
 async function main(argv) {
   const devUrlFlag = argv.indexOf("--dev-url");
-  const devUrl = devUrlFlag === -1 ? DEFAULT_DEV_URL : argv[devUrlFlag + 1];
+  const devUrl = devUrlFlag === -1 ? process.env.GROK_DEV_URL : argv[devUrlFlag + 1];
+  if (!devUrl) {
+    console.error("[auth-invariant] supply --dev-url for this Grok checkout; no default host will be probed.");
+    process.exit(2);
+  }
+  try {
+    const health = await fetch(new URL("/api/trading-app/v1/health/live", devUrl), { signal: AbortSignal.timeout(5000) });
+    const identity = await health.json();
+    if (!health.ok || identity.service !== EXPECTED_SERVICE) throw new Error("wrong service identity");
+  } catch {
+    console.error("[auth-invariant] target did not identify as the Grok GitHub app; refusing to compare another app.");
+    process.exit(2);
+  }
   const result = compareAuthInvariant({
     devAuthEnabled: await probeDevAuthEnabled(devUrl),
     buildAuthEnabled: buildAuthEnabled(),

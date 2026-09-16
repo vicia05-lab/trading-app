@@ -1,12 +1,12 @@
 type BrokerRow = Record<string, string | boolean | null>;
-const SCALE = 1_000_000n;
+const SCALE = 1_000_000_000n;
 function decimal(value: unknown): bigint {
-  if (typeof value !== "string" || !/^-?[0-9]+(?:\.[0-9]{1,6})?$/.test(value)) {
+  if (typeof value !== "string" || !/^-?[0-9]+(?:\.[0-9]{1,9})?$/.test(value)) {
     throw new Error("Paper capacity unavailable: invalid broker amount");
   }
   const negative = value.startsWith("-");
   const [whole, fraction = ""] = value.replace(/^-/, "").split(".");
-  const result = BigInt(whole) * SCALE + BigInt(fraction.padEnd(6, "0"));
+  const result = BigInt(whole) * SCALE + BigInt(fraction.padEnd(9, "0"));
   return negative ? -result : result;
 }
 function symbolOf(row: BrokerRow): string {

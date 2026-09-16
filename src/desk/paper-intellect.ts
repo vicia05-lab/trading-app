@@ -144,8 +144,15 @@ export async function runIntelligentPaperCycle(args: {
         timeInForce: "day",
         notional: decision.notional,
         actor: args.actor,
+        requestScope: "grok-intellect",
+        requestId: `intellect:${new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(String(clock.timestamp)))}:${symbol}`,
       });
       if (typeof rec.id !== "string" || !rec.id) throw new Error("Missing broker order receipt; reconciliation required");
+      if (["rejected", "canceled", "expired", "replaced"].includes(String(rec.status).toLowerCase())) throw new Error(`Broker order ${rec.status}; no new ticket counted`);
+      if (rec._grok_replayed === true) {
+        results.push({ symbol, decision: { action: "HOLD", reason: "Existing session ticket recovered; no new order sent" } });
+        continue;
+      }
       bought += 1;
       results.push({ symbol, decision, orderId: rec.id });
     } catch (e) {
