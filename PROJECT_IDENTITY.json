@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "project_id": "grok-github-trading-app",
+  "repository": "vicia05-lab/trading-app",
+  "application_name": "Trading App",
+  "separate_from": "The user's PC-hosted Trading App",
+  "paper_only": true
+}

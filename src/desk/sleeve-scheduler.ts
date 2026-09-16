@@ -1,3 +1,5 @@
+import { createSerialScheduler } from "./sleeve-scheduler-core";
+import { DeskError } from "./util";
 import { getSql } from "@/lib/db";
 import { getClock, publicStatus } from "./alpaca";
 import { runIntelligentPaperCycle } from "./paper-intellect";
@@ -12,6 +14,8 @@ export type SchedulerStatus = {
   last_run_at: string | null;
   last_summary: string | null;
   running: boolean;
+  executing: boolean;
+  last_error: string | null;
 };
 
 async function ensureTable(): Promise<void> {
@@ -19,14 +23,14 @@ async function ensureTable(): Promise<void> {
   await sql.query(`
     CREATE TABLE IF NOT EXISTS sleeve_scheduler (
       singleton_key boolean PRIMARY KEY DEFAULT TRUE,
-      enabled boolean NOT NULL DEFAULT TRUE,
+      enabled boolean NOT NULL DEFAULT FALSE,
       interval_sec integer NOT NULL DEFAULT 300,
       last_run_at timestamptz,
       last_summary text
     )`);
   await sql.query(
     `INSERT INTO sleeve_scheduler (singleton_key, enabled, interval_sec)
-     VALUES (TRUE, TRUE, 300) ON CONFLICT (singleton_key) DO NOTHING`,
+     VALUES (TRUE, FALSE, 300) ON CONFLICT (singleton_key) DO NOTHING`,
   );
 }
 
@@ -45,7 +49,7 @@ export async function schedulerStatus(): Promise<SchedulerStatus> {
     interval_sec: r?.interval_sec ?? 300,
     last_run_at: r?.last_run_at ?? null,
     last_summary: r?.last_summary ?? null,
-    running: ticking,
+    ...worker().status(),
   };
 }
 
@@ -54,6 +58,7 @@ export async function setSchedulerEnabled(on: boolean): Promise<SchedulerStatus>
   const sql = await getSql();
   await sql.query(`UPDATE sleeve_scheduler SET enabled = $1 WHERE singleton_key = TRUE`, [on]);
   if (on) startSleeveScheduler();
+  else stopSleeveScheduler();
   return schedulerStatus();
 }
 
@@ -88,14 +93,21 @@ async function note(summary: string): Promise<void> {
   );
 }
 
-let ticking = false;
-let handle: ReturnType<typeof setInterval> | null = null;
-
-export function startSleeveScheduler(): void {
-  if (handle) return;
-  ticking = true;
-  handle = setInterval(() => {
-    void tick().catch(() => undefined);
-  }, INTERVAL_MS);
-  void tick().catch(() => undefined);
+// One timer per process even when Vite hot-reloads the module. This does not
+// claim cross-process locking or survival of serverless suspension/restarts.
+const shared = globalThis as typeof globalThis & {
+  __grokSleeveSchedulerV2?: ReturnType<typeof createSerialScheduler>;
+};
+function worker() {
+  return shared.__grokSleeveSchedulerV2 ??= createSerialScheduler({
+    intervalMs: INTERVAL_MS,
+    run: tick,
+    reportError: async (error) => {
+      const code = error instanceof DeskError ? error.code : "UNEXPECTED_ERROR";
+      console.error(`[Trading App] Sleeve scheduler failed: ${code}`);
+      await note(`Scheduler failed: ${code}. No success recorded for this run.`);
+    },
+  });
 }
+export function startSleeveScheduler(): void { worker().start(); }
+export function stopSleeveScheduler(): void { worker().stop(); }

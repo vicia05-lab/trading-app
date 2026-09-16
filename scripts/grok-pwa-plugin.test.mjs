@@ -6,9 +6,9 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   appNameFromHost,
-  createHeadInjector,
+  createHeadInjector as createHeadInjectorImpl,
   grokXCreatorHeadTags,
-  injectGrokPwaHead,
+  injectGrokPwaHead as injectGrokPwaHeadImpl,
   isDocumentPath,
   isInstallQuery,
   publicAppHost,
@@ -20,6 +20,12 @@ import {
 import { renderInstallPage } from "./grok-pwa-plugin.mjs";
 
 const TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+// Generic head tests must not inherit this app's real Trading App site.json.
+// Tests with an explicit cwd/site still exercise filesystem identity loading.
+const isolatedContext = (ctx = {}) => ctx.cwd !== undefined || ctx.site !== undefined ? ctx : { ...ctx, site: {} };
+const injectGrokPwaHead = (html, ctx) => injectGrokPwaHeadImpl(html, isolatedContext(ctx));
+const createHeadInjector = (ctx) => createHeadInjectorImpl(isolatedContext(ctx));
+
 
 test("injects before </head>", () => {
   const out = injectGrokPwaHead("<html><head><title>x</title></head><body></body></html>");

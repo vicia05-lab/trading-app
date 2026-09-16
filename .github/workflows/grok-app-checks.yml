@@ -1,0 +1,87 @@
+name: Grok GitHub App Checks
+on:
+  push:
+    branches: [main, 'fix/grok-app-*']
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+concurrency:
+  group: grok-app-checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    if: github.repository == 'vicia05-lab/trading-app'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Record exact project identity and source
+        run: |
+          node scripts/check-project-identity.mjs
+          mkdir -p /tmp/grok-app-evidence
+          printf 'repository=%s\ncommit=%s\nref=%s\n' "$GITHUB_REPOSITORY" "$(git rev-parse HEAD)" "$GITHUB_REF" > /tmp/grok-app-evidence/identity.txt
+          git archive --format=tar.gz --output=/tmp/grok-app-evidence/source.tar.gz HEAD
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies without lifecycle scripts
+        id: install
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Typecheck
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run typecheck 2>&1 | tee /tmp/grok-app-evidence/typecheck.txt
+      - name: Application tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm test 2>&1 | tee /tmp/grok-app-evidence/tests.txt
+      - name: Script tests
+        if: ${{ !cancelled() }}
+        run: npm run test:scripts 2>&1 | tee /tmp/grok-app-evidence/script-tests.txt
+      - name: Python reference kernel audit
+        if: ${{ !cancelled() }}
+        run: python3 trading_app_kernel_audit.py 2>&1 | tee /tmp/grok-app-evidence/kernel-audit.txt
+      - name: Production build without database migration or deployment
+        id: build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: PATH="$PWD/node_modules/.bin:$PATH" node scripts/with-app-env.mjs vite build 2>&1 | tee /tmp/grok-app-evidence/build.txt
+      - name: Isolated browser verification with authentication enabled
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          VITE_AUTH_ENABLED: 'true'
+        run: |
+          npm install --prefix /tmp/grok-browser-tools --no-audit --no-fund agent-browser@0.36.0
+          export PATH="/tmp/grok-browser-tools/node_modules/.bin:$PATH"
+          export AGENT_BROWSER_EXECUTABLE_PATH="$(command -v google-chrome || command -v chromium)"
+          npm run dev > /tmp/grok-app-evidence/dev-server.txt 2>&1 &
+          APP_PID=$!
+          trap 'agent-browser close || true; kill "$APP_PID" || true' EXIT
+          READY=0
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8080/ > /dev/null; then READY=1; break; fi
+            sleep 1
+          done
+          test "$READY" = 1
+          agent-browser open http://127.0.0.1:8080/
+          agent-browser wait --load networkidle
+          agent-browser set viewport 1280 800
+          agent-browser eval 'if (document.body.innerText.trim().length < 40 || document.querySelector("vite-error-overlay")) throw new Error("Blank page or framework error"); document.body.innerText' > /tmp/grok-app-evidence/browser-body.txt
+          agent-browser snapshot -i > /tmp/grok-app-evidence/browser-elements.txt
+          agent-browser screenshot /tmp/grok-app-evidence/desktop.png
+          agent-browser errors > /tmp/grok-app-evidence/browser-errors.txt
+          agent-browser set viewport 390 844
+          agent-browser screenshot /tmp/grok-app-evidence/mobile.png
+          agent-browser eval 'if (document.documentElement.scrollWidth > innerWidth + 1) throw new Error("Horizontal overflow"); "Mobile layout fits"' > /tmp/grok-app-evidence/mobile-layout.txt
+          agent-browser close
+      - name: Preserve verification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: grok-app-checks-${{ github.sha }}
+          path: /tmp/grok-app-evidence/
+          retention-days: 3
