@@ -19,14 +19,14 @@ async function ensureTable(): Promise<void> {
   await sql.query(`
     CREATE TABLE IF NOT EXISTS sleeve_scheduler (
       singleton_key boolean PRIMARY KEY DEFAULT TRUE,
-      enabled boolean NOT NULL DEFAULT FALSE,
+      enabled boolean NOT NULL DEFAULT TRUE,
       interval_sec integer NOT NULL DEFAULT 300,
       last_run_at timestamptz,
       last_summary text
     )`);
   await sql.query(
     `INSERT INTO sleeve_scheduler (singleton_key, enabled, interval_sec)
-     VALUES (TRUE, FALSE, 300) ON CONFLICT (singleton_key) DO NOTHING`,
+     VALUES (TRUE, TRUE, 300) ON CONFLICT (singleton_key) DO NOTHING`,
   );
 }
 
