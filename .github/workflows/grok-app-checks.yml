@@ -1,0 +1,59 @@
+name: Grok GitHub App Checks
+
+on:
+  push:
+    branches: [main, 'fix/grok-app-*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grok-app-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    if: github.repository == 'vicia05-lab/trading-app'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Record exact project identity and source
+        shell: bash
+        run: |
+          test "$GITHUB_REPOSITORY" = 'vicia05-lab/trading-app'
+          mkdir -p /tmp/grok-app-evidence
+          printf 'repository=%s\ncommit=%s\nref=%s\n' "$GITHUB_REPOSITORY" "$(git rev-parse HEAD)" "$GITHUB_REF" > /tmp/grok-app-evidence/identity.txt
+          git archive --format=tar.gz --output=/tmp/grok-app-evidence/source.tar.gz HEAD
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+      - name: Typecheck
+        if: ${{ !cancelled() }}
+        run: npm run typecheck 2>&1 | tee /tmp/grok-app-evidence/typecheck.txt
+      - name: Application tests
+        if: ${{ !cancelled() }}
+        run: npm test 2>&1 | tee /tmp/grok-app-evidence/tests.txt
+      - name: Script tests
+        if: ${{ !cancelled() }}
+        run: npm run test:scripts 2>&1 | tee /tmp/grok-app-evidence/script-tests.txt
+      - name: Python reference kernel audit
+        if: ${{ !cancelled() }}
+        run: python3 trading_app_kernel_audit.py 2>&1 | tee /tmp/grok-app-evidence/kernel-audit.txt
+      - name: Build without database migration or deployment
+        if: ${{ !cancelled() }}
+        run: npm run build:dev 2>&1 | tee /tmp/grok-app-evidence/build.txt
+      - name: Preserve verification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: grok-app-checks-${{ github.sha }}
+          path: /tmp/grok-app-evidence/
+          retention-days: 3
