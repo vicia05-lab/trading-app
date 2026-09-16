@@ -1,4 +1,6 @@
-export default defineEventHandler(() => ({
+import { defineHandler } from "nitro";
+
+export default defineHandler(() => ({
   ok: true,
   service: "grok-github-trading-app",
   paperOnly: true,
