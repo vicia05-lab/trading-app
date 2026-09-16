@@ -103,7 +103,7 @@ function DeskBody({ desk, onChanged }: { desk: Desk; onChanged: () => Promise<vo
       ) : null}
 
       <p className="text-sm text-muted">
-        Research freezes live on <Link to="/earnings">Earnings</Link>. This page does not write the kernel clock.
+        Research freezes live on <Link to="/earnings" search={{ session: undefined }}>Earnings</Link>. This page does not write the kernel clock.
       </p>
     </>
   );

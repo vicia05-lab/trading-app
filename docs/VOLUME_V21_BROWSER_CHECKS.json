@@ -1,0 +1,22 @@
+{
+  "scope": "ISOLATED_COMPONENT_WITH_SYNTHETIC_TRANSPORT",
+  "authenticatedAppRun": false,
+  "realProviderRequests": false,
+  "brokerOrders": false,
+  "checks": [
+    "desktop renders real component",
+    "qualifying",
+    "capacity_full",
+    "missing_data",
+    "low_liquidity",
+    "same_bar_entry",
+    "missing_exit",
+    "mobile has no horizontal overflow",
+    "transport failure displays error without fabricated result",
+    "retry restores real component result",
+    "timeout clears busy state and permits retry",
+    "zero browser page errors"
+  ],
+  "passed": 12,
+  "errors": []
+}
