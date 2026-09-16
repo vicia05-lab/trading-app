@@ -49,7 +49,7 @@ jobs:
       - name: Production build without database migration or deployment
         id: build
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: node scripts/with-app-env.mjs vite build 2>&1 | tee /tmp/grok-app-evidence/build.txt
+        run: PATH="$PWD/node_modules/.bin:$PATH" node scripts/with-app-env.mjs vite build 2>&1 | tee /tmp/grok-app-evidence/build.txt
       - name: Isolated browser verification with authentication enabled
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
